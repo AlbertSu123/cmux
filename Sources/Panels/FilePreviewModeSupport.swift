@@ -5,6 +5,8 @@ extension FilePreviewMode {
         switch self {
         case .text:
             return "text"
+        case .csv:
+            return "csv"
         case .pdf:
             return "pdf"
         case .image:

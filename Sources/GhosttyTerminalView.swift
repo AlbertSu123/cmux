@@ -4880,6 +4880,12 @@ class GhosttyApp {
                 if filePathResolution.routed {
                     return true
                 }
+                let remoteRouted: Bool = performOnMain {
+                    surfaceView.tryOpenRemoteLinkToken(trimmedUrlString)
+                }
+                if remoteRouted {
+                    return true
+                }
             }
 
             guard let target = resolveTerminalOpenURLTarget(normalizedOpenURLString) else {
@@ -10925,6 +10931,115 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         resolveWordUnderCursorPath(at: point)?.path
     }
 
+    private static var remoteClickFetchesInFlight = Set<String>()
+
+    /// cmd-click fallback for paths printed inside an ssh/et session: the
+    /// path does not exist locally, but the surface has a detected remote
+    /// session, so fetch the file from that host and preview it locally.
+    fileprivate func tryOpenRemoteWordAsPath(at point: NSPoint? = nil) -> Bool {
+        guard let raw = rawWordUnderCursor() else { return false }
+        return tryOpenRemoteLinkToken(raw)
+    }
+
+    /// Token may be absolute, ~-relative, or cwd-relative. Relative tokens
+    /// resolve against the remote pwd reported in the tab title
+    /// ("user@host: pwd"); scp resolves bare relative paths against the
+    /// remote home, which covers sessions without a reported pwd.
+    fileprivate func tryOpenRemoteLinkToken(_ token: String) -> Bool {
+        var trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = trimmed.last, ".,;:!?)\"'".contains(last) {
+            trimmed.removeLast()
+        }
+        guard !trimmed.isEmpty,
+              URL(string: trimmed)?.scheme == nil,
+              trimmed.contains("/") || trimmed.hasPrefix("~"),
+              !trimmed.hasPrefix("www.") else { return false }
+        guard let termSurface = terminalSurface,
+              let workspace = termSurface.owningWorkspace(),
+              let ttyName = workspace.surfaceTTYNames[termSurface.id],
+              let session = TerminalSSHSessionDetector.detect(forTTY: ttyName) else {
+            return false
+        }
+        let remotePath: String
+        if trimmed.hasPrefix("/") {
+            remotePath = trimmed
+        } else if trimmed.hasPrefix("~/") {
+            remotePath = String(trimmed.dropFirst(2))
+        } else {
+            let cwd = remoteCwdFromTitle(workspace: workspace, surfaceId: termSurface.id)
+            if let cwd, cwd.hasPrefix("/") {
+                remotePath = cwd + "/" + trimmed
+            } else if let cwd, cwd.hasPrefix("~/") {
+                remotePath = String(cwd.dropFirst(2)) + "/" + trimmed
+            } else {
+                remotePath = trimmed
+            }
+        }
+        Self.fetchAndPreviewRemoteFile(
+            session: session,
+            remotePath: remotePath,
+            workspace: workspace,
+            panelId: termSurface.id
+        )
+        return true
+    }
+
+    private func remoteCwdFromTitle(workspace: Workspace, surfaceId: UUID) -> String? {
+        guard let title = workspace.panelTitles[surfaceId],
+              let range = title.range(of: ": ") else { return nil }
+        let cwd = String(title[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return cwd.isEmpty ? nil : cwd
+    }
+
+    private func rawWordUnderCursor() -> String? {
+        guard let surface = surface else { return nil }
+        var text = ghostty_text_s()
+        guard ghostty_surface_quicklook_word(surface, &text) else { return nil }
+        defer { ghostty_surface_free_text(surface, &text) }
+        guard text.text_len > 0, let ptr = text.text else { return nil }
+        let wordData = Data(bytes: ptr, count: Int(text.text_len))
+        return String(bytes: wordData, encoding: .utf8)
+    }
+
+    private static func fetchAndPreviewRemoteFile(
+        session: DetectedSSHSession,
+        remotePath: String,
+        workspace: Workspace,
+        panelId: UUID
+    ) {
+        let fetchKey = "\(session.destination):\(remotePath)"
+        guard remoteClickFetchesInFlight.insert(fetchKey).inserted else { return }
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-remote-click", isDirectory: true)
+            .appendingPathComponent(stableCacheKey(fetchKey), isDirectory: true)
+        let baseName = (remotePath as NSString).lastPathComponent
+        let localURL = cacheDir.appendingPathComponent(baseName.isEmpty ? "file" : baseName)
+        DispatchQueue.global(qos: .userInitiated).async {
+            try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            let fetched = session.downloadFile(remotePath: remotePath, to: localURL.path)
+            DispatchQueue.main.async {
+                remoteClickFetchesInFlight.remove(fetchKey)
+                guard fetched else { return }
+                if !CommandClickFileOpenRouter.openInCmux(
+                    workspace: workspace,
+                    sourcePanelId: panelId,
+                    filePath: localURL.path
+                ) {
+                    _ = workspace.openOrFocusFilePreviewSplit(from: panelId, filePath: localURL.path)
+                }
+            }
+        }
+    }
+
+    private static func stableCacheKey(_ value: String) -> String {
+        var hash: UInt64 = 14695981039346656037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return String(hash, radix: 36)
+    }
+
     private func resolveWordUnderCursorPath(at point: NSPoint? = nil) -> WordPathResolution? {
         guard let surface = surface else { return nil }
 
@@ -11281,6 +11396,9 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
                 ]
             )
 #endif
+            if tryOpenRemoteWordAsPath(at: resolvedPoint) {
+                return nil
+            }
             return nil
         }
         guard !ghosttyConsumed || resolution.source == .snapshot else {

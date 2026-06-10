@@ -636,6 +636,7 @@ final class FilePreviewDragPasteboardWriter: NSObject, NSPasteboardWriting {
 
 enum FilePreviewMode: Equatable {
     case text
+    case csv
     case pdf
     case image
     case media
@@ -704,6 +705,8 @@ enum FilePreviewKindResolver {
         switch mode {
         case .text:
             return "doc.text"
+        case .csv:
+            return "tablecells"
         case .pdf:
             return "doc.richtext"
         case .image:
@@ -717,6 +720,9 @@ enum FilePreviewKindResolver {
 
     private static func initialResolution(for url: URL) -> Resolution {
         let ext = url.pathExtension.lowercased()
+        if ext == "csv" || ext == "tsv" {
+            return .resolved(.csv)
+        }
         if let textResolution = knownTextResolutionBeforeMedia(for: url, sniffMediaCollisions: false) {
             return textResolution
         }
@@ -739,6 +745,9 @@ enum FilePreviewKindResolver {
 
     private static func resolvedResolution(for url: URL) -> Resolution {
         let ext = url.pathExtension.lowercased()
+        if ext == "csv" || ext == "tsv" {
+            return .resolved(.csv)
+        }
         if ext == "plist", looksLikeBinaryPropertyList(url: url) {
             return .resolved(.quickLook)
         }
@@ -1262,6 +1271,8 @@ final class FilePreviewPanel: Panel, ObservableObject, FilePreviewTextEditingPan
         switch mode {
         case .text:
             return .textEditor
+        case .csv:
+            return .quickLook
         case .pdf:
             return .pdfCanvas
         case .image:
@@ -1357,6 +1368,13 @@ struct FilePreviewPanelView: View {
                     themeForegroundColor: themeForegroundColor,
                     drawsBackground: appearance.drawsContentBackground,
                     wordWrap: fileEditorWordWrap
+                )
+            case .csv:
+                FilePreviewCSVView(
+                    panel: panel,
+                    isVisibleInUI: isVisibleInUI,
+                    backgroundColor: contentBackgroundColor,
+                    foregroundColor: themeForegroundColor
                 )
             case .pdf:
                 FilePreviewPDFView(
@@ -4456,5 +4474,224 @@ private final class FilePreviewPointerObserverView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
+    }
+}
+
+// MARK: - CSV preview
+
+private struct CSVPreviewDocument {
+    struct Row: Identifiable {
+        let id: Int
+        let cells: [String]
+    }
+
+    let header: [String]
+    let rows: [Row]
+    let columnWidths: [CGFloat]
+    let truncated: Bool
+
+    static func load(url: URL) -> CSVPreviewDocument? {
+        let maxBytes = 25_000_000
+        let maxRows = 5000
+        guard let data = try? Data(contentsOf: url), data.count <= maxBytes else { return nil }
+        guard let text = String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1) else { return nil }
+        let delimiter: Character = url.pathExtension.lowercased() == "tsv" ? "\t" : ","
+        let (records, truncated) = parse(text, delimiter: delimiter, maxRecords: maxRows + 1)
+        guard let first = records.first, records.count > 1 || first.count > 1 else { return nil }
+        let rows = records.dropFirst().enumerated().map { Row(id: $0.offset, cells: $0.element) }
+        let columnCount = max(first.count, rows.prefix(200).map(\.cells.count).max() ?? 0)
+        guard columnCount > 0 else { return nil }
+        var widths: [CGFloat] = []
+        widths.reserveCapacity(columnCount)
+        for column in 0..<columnCount {
+            var longest = column < first.count ? first[column].count : 0
+            for row in rows.prefix(200) where column < row.cells.count {
+                longest = max(longest, row.cells[column].count)
+            }
+            widths.append(min(max(CGFloat(longest) * 7.2 + 18, 56), 420))
+        }
+        return CSVPreviewDocument(header: first, rows: rows, columnWidths: widths, truncated: truncated)
+    }
+
+    private static func parse(
+        _ text: String,
+        delimiter: Character,
+        maxRecords: Int
+    ) -> ([[String]], Bool) {
+        var records: [[String]] = []
+        var record: [String] = []
+        var field = ""
+        var inQuotes = false
+        var index = text.startIndex
+        let end = text.endIndex
+
+        func endField() {
+            record.append(field)
+            field = ""
+        }
+
+        func endRecord() -> Bool {
+            endField()
+            if !(record.count == 1 && record[0].isEmpty) {
+                records.append(record)
+            }
+            record = []
+            return records.count >= maxRecords
+        }
+
+        while index < end {
+            let character = text[index]
+            if inQuotes {
+                if character == "\"" {
+                    let next = text.index(after: index)
+                    if next < end, text[next] == "\"" {
+                        field.append("\"")
+                        index = text.index(after: next)
+                        continue
+                    }
+                    inQuotes = false
+                } else {
+                    field.append(character)
+                }
+            } else if character == "\"", field.isEmpty {
+                inQuotes = true
+            } else if character == delimiter {
+                endField()
+            } else if character == "\n" || character == "\r\n" {
+                if endRecord() { return (records, true) }
+            } else if character == "\r" {
+                let next = text.index(after: index)
+                if next < end, text[next] == "\n" {
+                    index = next
+                }
+                if endRecord() { return (records, true) }
+            } else {
+                field.append(character)
+            }
+            index = text.index(after: index)
+        }
+        if !field.isEmpty || !record.isEmpty {
+            _ = endRecord()
+        }
+        return (records, false)
+    }
+}
+
+private struct FilePreviewCSVView: View {
+    @ObservedObject var panel: FilePreviewPanel
+    let isVisibleInUI: Bool
+    let backgroundColor: NSColor
+    let foregroundColor: NSColor
+
+    @State private var document: CSVPreviewDocument?
+    @State private var loadFailed = false
+
+    var body: some View {
+        Group {
+            if let document {
+                grid(for: document)
+            } else if loadFailed {
+                failureView
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(Color(nsColor: backgroundColor))
+        .task(id: panel.filePath) {
+            let url = URL(fileURLWithPath: panel.filePath)
+            let loaded = await Task.detached(priority: .userInitiated) {
+                CSVPreviewDocument.load(url: url)
+            }.value
+            document = loaded
+            loadFailed = loaded == nil
+        }
+    }
+
+    private var failureView: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "tablecells.badge.ellipsis")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text(String(
+                localized: "filePreview.csv.unparseable",
+                defaultValue: "Couldn't display this file as a table"
+            ))
+            .font(.headline)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func grid(for document: CSVPreviewDocument) -> some View {
+        let totalWidth = document.columnWidths.reduce(0, +)
+        let gridLine = Color(nsColor: foregroundColor).opacity(0.08)
+        return VStack(spacing: 0) {
+            ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section(header: headerRow(for: document, gridLine: gridLine)) {
+                        ForEach(document.rows) { row in
+                            cellRow(row, document: document)
+                                .background(
+                                    row.id.isMultiple(of: 2)
+                                        ? Color.clear
+                                        : Color(nsColor: foregroundColor).opacity(0.035)
+                                )
+                                .overlay(alignment: .bottom) {
+                                    gridLine.frame(height: 1)
+                                }
+                        }
+                    }
+                }
+                .frame(width: max(totalWidth, 1), alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            if document.truncated {
+                Text(String(
+                    localized: "filePreview.csv.truncated",
+                    defaultValue: "Showing the first \(document.rows.count) rows"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
+        }
+    }
+
+    private func headerRow(for document: CSVPreviewDocument, gridLine: Color) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(document.columnWidths.enumerated()), id: \.offset) { column, width in
+                Text(column < document.header.count ? document.header[column] : "")
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .frame(width: width, alignment: .leading)
+            }
+        }
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            gridLine.frame(height: 1)
+        }
+    }
+
+    private func cellRow(_ row: CSVPreviewDocument.Row, document: CSVPreviewDocument) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(document.columnWidths.enumerated()), id: \.offset) { column, width in
+                let cell = column < row.cells.count ? row.cells[column] : ""
+                Text(cell)
+                    .font(.system(size: 12))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(cell)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .frame(width: width, alignment: .leading)
+            }
+        }
     }
 }

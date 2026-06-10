@@ -127,6 +127,23 @@ struct DetectedSSHSession: Equatable {
     }
 
     private func scpArguments(localPath: String, remotePath: String) -> [String] {
+        var args = scpBaseArguments()
+        args += [localPath, "\(Self.scpRemoteDestination(destination)):\(remotePath)"]
+        return args
+    }
+
+    func downloadFile(remotePath: String, to localPath: String, timeout: TimeInterval = 30) -> Bool {
+        var args = scpBaseArguments()
+        args += ["\(Self.scpRemoteDestination(destination)):\(remotePath)", localPath]
+        guard let result = try? Self.runProcess(
+            executable: "/usr/bin/scp",
+            arguments: args,
+            timeout: timeout
+        ) else { return false }
+        return result.status == 0
+    }
+
+    private func scpBaseArguments() -> [String] {
         var args: [String] = [
             "-q",
             "-o", "ConnectTimeout=6",
@@ -171,7 +188,6 @@ struct DetectedSSHSession: Equatable {
             args += ["-o", option]
         }
 
-        args += [localPath, "\(Self.scpRemoteDestination(destination)):\(remotePath)"]
         return args
     }
 
