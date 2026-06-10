@@ -17,6 +17,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GHOSTTY_DIR="$REPO_ROOT/ghostty"
 ZIG_REQUIRED="${ZIG_REQUIRED:-0.15.2}"
+# Local patched builds: zig 0.15.2 fails to link under Xcode's script-phase
+# environment on this machine; the stub helper is sufficient for daily use.
+CMUX_SKIP_ZIG_BUILD="${CMUX_SKIP_ZIG_BUILD:-1}"
 
 OUTPUT_PATH=""
 TARGET_TRIPLE=""
