@@ -564,6 +564,47 @@ final class TabManagerSessionSnapshotTests: XCTestCase {
         XCTAssertTrue(workspace.manualUnreadPanelIds.contains(restoredPanelId))
     }
 
+    func testReopenedTerminalHoldsRestoredTitleUntilExplicitInput() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let pane = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+        let panelId = try XCTUnwrap(workspace.newTerminalSurface(inPane: pane, focus: true)?.id)
+        XCTAssertTrue(workspace.updatePanelTitle(panelId: panelId, title: "MyApp"))
+
+        workspace.markCloseHistoryEligible(panelId: panelId)
+        XCTAssertTrue(workspace.closePanel(panelId, force: true))
+        drainMainQueue()
+
+        XCTAssertTrue(manager.reopenMostRecentlyClosedItem())
+        let restoredPanelId = try XCTUnwrap(
+            workspace.panelTitles.first(where: { $0.value == "MyApp" })?.key
+        )
+
+        // The reopened pane's fresh shell reports its prompt title (the cwd)
+        // within a second; that automatic update must not displace the
+        // restored title while the pane is untouched.
+        XCTAssertFalse(workspace.updatePanelTitle(panelId: restoredPanelId, title: "~/somewhere"))
+        XCTAssertEqual(workspace.panelTitles[restoredPanelId], "MyApp")
+
+        // Explicit input hands the title back to the live session.
+        let surface = try XCTUnwrap(workspace.terminalPanel(for: restoredPanelId)?.surface)
+        surface.didReceiveExplicitInput()
+        XCTAssertTrue(workspace.updatePanelTitle(panelId: restoredPanelId, title: "vim"))
+        XCTAssertEqual(workspace.panelTitles[restoredPanelId], "vim")
+    }
+
+    func testReopenedTerminalTitleHoldDoesNotBlockUsedPanes() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let pane = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+        let panelId = try XCTUnwrap(workspace.newTerminalSurface(inPane: pane, focus: true)?.id)
+
+        // A pane that was never restored has no hold: titles apply directly.
+        XCTAssertTrue(workspace.updatePanelTitle(panelId: panelId, title: "first"))
+        XCTAssertTrue(workspace.updatePanelTitle(panelId: panelId, title: "second"))
+        XCTAssertEqual(workspace.panelTitles[panelId], "second")
+    }
+
     func testReopenClosedPanelBackReturnsToPreviousWorkspaceFocus() throws {
         let manager = TabManager()
         let firstWorkspace = try XCTUnwrap(manager.selectedWorkspace)
