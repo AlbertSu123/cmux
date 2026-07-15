@@ -77,6 +77,16 @@ private final class FakeWorkspaceDragRegistry: SidebarWorkspaceDragRegistering {
         #expect(registry.current == id)
     }
 
+    @Test func clearDragResetsBonsplitTabDropHover() {
+        let registry = FakeWorkspaceDragRegistry()
+        let state = SidebarDragState(workspaceDragRegistry: registry)
+
+        state.bonsplitTabDropHoverWorkspaceId = UUID()
+        state.clearDrag()
+
+        #expect(state.bonsplitTabDropHoverWorkspaceId == nil)
+    }
+
     @Test func setDropIndicatorTracksTopLevelFlag() {
         let registry = FakeWorkspaceDragRegistry()
         let state = SidebarDragState(workspaceDragRegistry: registry)

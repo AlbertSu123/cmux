@@ -11908,6 +11908,17 @@ struct VerticalTabsSidebar: View {
                 isBonsplitWorkspaceDropTargetCollectionActive = isActive
             },
             isWorkspaceDropTargetCollectionActive: isBonsplitWorkspaceDropTargetCollectionActive,
+            setHoveredWorkspaceDropTarget: { workspaceId in
+                guard dragState.bonsplitTabDropHoverWorkspaceId != workspaceId else { return }
+                dragState.bonsplitTabDropHoverWorkspaceId = workspaceId
+            },
+            springLoadRevealWorkspace: { workspaceId in
+                guard tabManager.selectedTabId != workspaceId,
+                      tabManager.tabs.contains(where: { $0.id == workspaceId }) else { return }
+                tabManager.focusTab(workspaceId)
+                selectedTabIds = [workspaceId]
+                lastSidebarSelectionIndex = tabManager.tabs.firstIndex { $0.id == workspaceId }
+            },
             targetBridge: bonsplitWorkspaceDropTargetBridge
         )
     }
@@ -12231,6 +12242,7 @@ struct VerticalTabsSidebar: View {
         // Equatable conformance ignores closures, so rows whose snapshot is
         // unchanged skip re-render when drag state moves.
         let isBeingDragged = dragState.draggedTabId == tab.id
+        let isBonsplitTabDropHovered = dragState.bonsplitTabDropHoverWorkspaceId == tab.id
         let sidebarReorderIds = renderContext.sidebarReorderIds
         let topDropIndicatorVisible = SidebarTabDropIndicatorPredicate().topVisible(
             forTabId: tab.id,
@@ -12315,6 +12327,7 @@ struct VerticalTabsSidebar: View {
             topDropIndicatorVisible: topDropIndicatorVisible,
             bottomDropIndicatorVisible: bottomDropIndicatorVisible,
             isBonsplitWorkspaceDropActive: isBonsplitWorkspaceDropTargetCollectionActive,
+            isBonsplitTabDropHovered: isBonsplitTabDropHovered,
             bonsplitSourceWorkspaceId: bonsplitSourceWorkspaceId,
             moveBonsplitTabToWorkspace: moveBonsplitTabToWorkspace,
             syncSidebarSelectionAfterBonsplitDrop: syncSidebarSelectionAfterBonsplitDrop,
@@ -12921,6 +12934,7 @@ struct TabItemView: View, Equatable {
         lhs.topDropIndicatorVisible == rhs.topDropIndicatorVisible &&
         lhs.bottomDropIndicatorVisible == rhs.bottomDropIndicatorVisible &&
         lhs.isBonsplitWorkspaceDropActive == rhs.isBonsplitWorkspaceDropActive &&
+        lhs.isBonsplitTabDropHovered == rhs.isBonsplitTabDropHovered &&
         lhs.isChecklistExpanded == rhs.isChecklistExpanded &&
         lhs.checklistAddFieldActivationToken == rhs.checklistAddFieldActivationToken &&
         lhs.isChecklistPopoverPresented == rhs.isChecklistPopoverPresented &&
@@ -12974,6 +12988,7 @@ struct TabItemView: View, Equatable {
     let topDropIndicatorVisible: Bool
     let bottomDropIndicatorVisible: Bool
     let isBonsplitWorkspaceDropActive: Bool
+    let isBonsplitTabDropHovered: Bool
     let bonsplitSourceWorkspaceId: @MainActor (UUID) -> UUID?
     let moveBonsplitTabToWorkspace: @MainActor (BonsplitTabDragPayload.Transfer, UUID) -> Bool
     let syncSidebarSelectionAfterBonsplitDrop: @MainActor () -> Void
@@ -13760,6 +13775,16 @@ struct TabItemView: View, Equatable {
                             .padding(.leading, 4)
                             .padding(.vertical, 5)
                             .offset(x: -1)
+                    }
+                }
+                .overlay {
+                    if isBonsplitTabDropHovered {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(cmuxAccentColor().opacity(0.12))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(cmuxAccentColor(), lineWidth: 2)
+                            }
                     }
                 }
         )

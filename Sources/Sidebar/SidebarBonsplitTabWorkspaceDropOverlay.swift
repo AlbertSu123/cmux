@@ -50,6 +50,8 @@ struct SidebarBonsplitTabWorkspaceDropOverlay: NSViewRepresentable {
     let updateAutoscroll: () -> Void
     let setWorkspaceDropTargetCollectionActive: (Bool) -> Void
     let isWorkspaceDropTargetCollectionActive: Bool
+    let setHoveredWorkspaceDropTarget: (UUID?) -> Void
+    let springLoadRevealWorkspace: (UUID) -> Void
     let targetBridge: TargetBridge
 
     func makeNSView(context: Context) -> SidebarBonsplitTabWorkspaceDropView {
@@ -79,6 +81,8 @@ struct SidebarBonsplitTabWorkspaceDropOverlay: NSViewRepresentable {
         nsView.setDropIndicator = { indicator in
             dropIndicator = indicator
         }
+        nsView.setHoveredWorkspaceDropTarget = setHoveredWorkspaceDropTarget
+        nsView.springLoadRevealWorkspace = springLoadRevealWorkspace
         nsView.performExistingWorkspaceMove = { workspaceId, transfer in
             guard moveToExistingWorkspace(workspaceId, transfer) else { return false }
             selectedTabIds = [workspaceId]
@@ -125,11 +129,18 @@ final class SidebarBonsplitTabWorkspaceDropView: NSView {
     var updateAutoscroll: () -> Void = {}
     var setWorkspaceDropTargetCollectionActive: (Bool) -> Void = { _ in }
     var setDropIndicator: (SidebarDropIndicator?) -> Void = { _ in }
+    var setHoveredWorkspaceDropTarget: (UUID?) -> Void = { _ in }
+    var springLoadRevealWorkspace: (UUID) -> Void = { _ in }
     var performExistingWorkspaceMove: (UUID, BonsplitTabDragPayload.Transfer) -> Bool = { _, _ in false }
     var performNewWorkspaceMove: (Int, SidebarDropIndicator, BonsplitTabDragPayload.Transfer) -> Bool = { _, _, _ in false }
+    /// How long a Bonsplit tab drag must hover one workspace row before that
+    /// workspace is spring-load revealed (matching Finder's folder timing).
+    private static let springLoadHoverDelay: TimeInterval = 0.55
     private var isRequestingWorkspaceDropTargets = false
     private var workspaceDropTargetRequestId: UInt64 = 0
     private var pendingDrop: PendingDrop?
+    private var hoveredWorkspaceDropTargetId: UUID?
+    private var springLoadWorkItem: DispatchWorkItem?
     private var targets: SidebarDropPlanner.OrderedWorkspaceDropTargets {
         targetBridge?.targets ?? SidebarDropPlanner.OrderedWorkspaceDropTargets([])
     }
@@ -164,6 +175,7 @@ final class SidebarBonsplitTabWorkspaceDropView: NSView {
         guard pendingDrop == nil else {
             completeOrClearPendingDropAfterDragTeardown()
             setDropIndicator(nil)
+            setHoveredExistingWorkspace(nil)
             return
         }
         updateWorkspaceDropTargetCollection(sender, isActive: false)
@@ -281,6 +293,7 @@ final class SidebarBonsplitTabWorkspaceDropView: NSView {
         guard pendingDrop == nil else {
             completeOrClearPendingDropAfterDragTeardown()
             setDropIndicator(nil)
+            setHoveredExistingWorkspace(nil)
             return
         }
         updateWorkspaceDropTargetCollection(sender, isActive: false)
@@ -290,12 +303,35 @@ final class SidebarBonsplitTabWorkspaceDropView: NSView {
         setDropIndicator(nil)
     }
 
+    /// Tracks which workspace row the drag currently hovers: publishes the
+    /// row-highlight state on change and (re)arms the spring-load timer that
+    /// reveals the hovered workspace so the tab can be dropped at an exact
+    /// position in its tab bar.
+    private func setHoveredExistingWorkspace(_ workspaceId: UUID?) {
+        guard hoveredWorkspaceDropTargetId != workspaceId else { return }
+        hoveredWorkspaceDropTargetId = workspaceId
+        setHoveredWorkspaceDropTarget(workspaceId)
+        springLoadWorkItem?.cancel()
+        springLoadWorkItem = nil
+        guard let workspaceId else { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.hoveredWorkspaceDropTargetId == workspaceId else { return }
+#if DEBUG
+            dlog("sidebar.workspaceDropOverlay.springLoad reveal=\(String(workspaceId.uuidString.prefix(5)))")
+#endif
+            self.springLoadRevealWorkspace(workspaceId)
+        }
+        springLoadWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.springLoadHoverDelay, execute: workItem)
+    }
+
     private func updateDrag(_ sender: any NSDraggingInfo, phase: String) -> NSDragOperation {
         let action = action(for: sender)
         if isRequestingWorkspaceDropTargets,
            targets.isEmpty,
            BonsplitTabDragPayload.transfer(from: sender.draggingPasteboard) != nil {
             setDropIndicator(nil)
+            setHoveredExistingWorkspace(nil)
 #if DEBUG
             dlog("sidebar.workspaceDropOverlay.\(phase) accepted=1 pendingTargets=1")
 #endif
@@ -303,6 +339,7 @@ final class SidebarBonsplitTabWorkspaceDropView: NSView {
         }
         guard acceptedTransfer(sender, action: action) != nil, let action else {
             setDropIndicator(nil)
+            setHoveredExistingWorkspace(nil)
 #if DEBUG
             dlog(
                 "sidebar.workspaceDropOverlay.\(phase) accepted=0 clear=1 " +
@@ -316,8 +353,10 @@ final class SidebarBonsplitTabWorkspaceDropView: NSView {
         switch action {
         case .newWorkspace(_, let indicator):
             setDropIndicator(indicator)
-        case .existingWorkspace:
+            setHoveredExistingWorkspace(nil)
+        case .existingWorkspace(let workspaceId):
             setDropIndicator(nil)
+            setHoveredExistingWorkspace(workspaceId)
         }
 
 #if DEBUG
@@ -354,6 +393,7 @@ final class SidebarBonsplitTabWorkspaceDropView: NSView {
             self.clearPendingDrop()
             self.setWorkspaceDropTargetCollectionActive(false)
             self.setDropIndicator(nil)
+            self.setHoveredExistingWorkspace(nil)
 #if DEBUG
             dlog("sidebar.workspaceDropOverlay.pendingTeardown clear=1")
 #endif
@@ -369,6 +409,7 @@ final class SidebarBonsplitTabWorkspaceDropView: NSView {
         )
         if !shouldRequestTargets {
             pendingDrop = nil
+            setHoveredExistingWorkspace(nil)
         }
         if shouldRequestTargets, !isRequestingWorkspaceDropTargets {
             workspaceDropTargetRequestId &+= 1

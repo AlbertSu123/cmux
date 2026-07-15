@@ -24,6 +24,12 @@ public final class SidebarDragState {
     /// Where the sidebar should currently render the drop indicator, or `nil`.
     public var dropIndicator: SidebarDropIndicator?
 
+    /// The workspace row currently hovered by an in-flight Bonsplit tab drag
+    /// (`com.splittabbar.tabtransfer`), or `nil`. Drives the row's drop-target
+    /// highlight; per-property tracking keeps invalidation scoped to the rows
+    /// whose snapshot reads it.
+    public var bonsplitTabDropHoverWorkspaceId: UUID?
+
     /// Whether the active indicator is positioned against top-level (group-folded)
     /// rows rather than raw rows, so the overlay aligns to the same coordinate
     /// space the planner reasoned in.
@@ -108,6 +114,7 @@ public final class SidebarDragState {
         originatedActiveDrag = false
         foreignDraggedIsPinned = nil
         draggedTabId = nil
+        bonsplitTabDropHoverWorkspaceId = nil
         clearDropIndicator()
     }
 }
