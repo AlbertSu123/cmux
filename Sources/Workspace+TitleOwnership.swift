@@ -61,9 +61,23 @@ extension Workspace {
     }
 
     @discardableResult
+    /// Whether `panelId`'s restored session title is still protected from
+    /// automatic title updates. Clears the hold (and answers false) once the
+    /// panel's surface has received explicit input, so live titles win again
+    /// the moment the pane is actually used.
+    func shouldHoldRestoredTitle(panelId: UUID) -> Bool {
+        guard restoredPanelTitleHolds.contains(panelId) else { return false }
+        if let surface = terminalPanel(for: panelId)?.surface, surface.hasReceivedExplicitInput {
+            restoredPanelTitleHolds.remove(panelId)
+            return false
+        }
+        return true
+    }
+
     func updatePanelTitle(panelId: UUID, title: String) -> Bool {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, panels[panelId] != nil else { return false }
+        guard !shouldHoldRestoredTitle(panelId: panelId) else { return false }
         var didMutate = false
         var didMutatePanelTitle = false
         var didMutateWorkspaceTitle = false

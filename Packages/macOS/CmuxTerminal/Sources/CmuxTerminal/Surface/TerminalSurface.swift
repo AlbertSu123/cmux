@@ -223,6 +223,11 @@ public final class TerminalSurface: Identifiable, ObservableObject {
     var runtimeSurfaceCreatedAt: Date?
     var teardownRequestedAt: Date?
     var teardownRequestReason: String?
+    /// Whether this surface has received explicit input (keystroke, paste,
+    /// or socket send) since creation. A restored panel's held session title
+    /// yields to live title updates only after this flips true. Main-thread
+    /// only, like the pending-input queue below.
+    public internal(set) var hasReceivedExplicitInput = false
     // Main-thread only. Public socket send entrypoints are MainActor-isolated
     // before reading `surface` or mutating this pending queue.
     var pendingSocketInputQueue: [PendingSocketInput] = []

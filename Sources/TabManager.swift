@@ -3297,6 +3297,9 @@ class TabManager: ObservableObject {
         guard let tab = workspacesById[tabId],
               let terminalPanel = tab.terminalPanel(for: panelId),
               terminalPanel.surface === sourceSurface else { return }
+        // Also guards the workspace-level applyProcessTitle below, so a held
+        // restored title is not displaced from the sidebar row either.
+        guard !tab.shouldHoldRestoredTitle(panelId: panelId) else { return }
         let previousDisplayTitle = resolvedWorkspaceDisplayTitle(for: tab).trimmingCharacters(in: .whitespacesAndNewlines)
         _ = tab.updatePanelTitle(panelId: panelId, title: title)
         guard !tab.isRemoteTmuxMirror else { return }

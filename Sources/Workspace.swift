@@ -1680,6 +1680,12 @@ extension Workspace {
 
         if let title = snapshot.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
             panelTitles[panelId] = title
+            // A restored terminal spawns a fresh shell whose prompt title
+            // would displace the saved one within a second; hold the saved
+            // title until the pane actually receives input (#5931 follow-up).
+            if snapshot.type == .terminal {
+                restoredPanelTitleHolds.insert(panelId)
+            }
         }
 
         setPanelCustomTitle(panelId: panelId, title: snapshot.customTitle, source: snapshot.customTitleSource ?? .user)
@@ -2206,6 +2212,11 @@ final class Workspace: Identifiable, ObservableObject {
         set { sidebarMetadata.panelDirectoryDisplayLabels = newValue }
     }
     @Published var panelTitles: [UUID: String] = [:]
+    /// Terminal panels whose `panelTitles` entry was restored from a session
+    /// snapshot and must not be displaced by automatic title updates (the
+    /// fresh shell's prompt title) until the pane receives explicit input.
+    /// Checked and cleared through `shouldHoldRestoredTitle(panelId:)`.
+    var restoredPanelTitleHolds: Set<UUID> = []
     @Published var panelCustomTitles: [UUID: String] = [:]
     /// Provenance of entries in `panelCustomTitles` (see ``CustomTitleSource``).
     /// An entry may be absent for a title carried across panel moves or
@@ -4866,6 +4877,7 @@ final class Workspace: Identifiable, ObservableObject {
         remoteDirectoryTrustRequiredPanelIds = remoteDirectoryTrustRequiredPanelIds.filter { validSurfaceIds.contains($0) }
         remoteDirectoryReportPanelIds = remoteDirectoryReportPanelIds.filter { validSurfaceIds.contains($0) }
         panelTitles = panelTitles.filter { validSurfaceIds.contains($0.key) }
+        restoredPanelTitleHolds = restoredPanelTitleHolds.filter { validSurfaceIds.contains($0) }
         panelCustomTitles = panelCustomTitles.filter { validSurfaceIds.contains($0.key) }
         panelCustomTitleSources = panelCustomTitleSources.filter { validSurfaceIds.contains($0.key) }
         pinnedPanelIds = pinnedPanelIds.filter { validSurfaceIds.contains($0) }
