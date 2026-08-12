@@ -33,7 +33,16 @@ INSTALL_BUNDLE_ID="com.cmuxterm.app.debug.remote.click"
 SIGN_IDENTITY="Apple Development: Albert Su (H559K3Z4TU)"
 
 PUSH=1
-if [[ "${1:-}" == "--no-push" ]]; then PUSH=0; fi
+REBASE=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-push) PUSH=0 ;;
+    # Build and install exactly what is committed here. Use when the branch is
+    # far behind upstream and the point is to ship a local fix, not to update.
+    --no-rebase) REBASE=0; PUSH=0 ;;
+    *) echo "error: unknown option $arg (expected --no-push or --no-rebase)" >&2; exit 1 ;;
+  esac
+done
 
 cd "$REPO_DIR"
 
@@ -46,17 +55,21 @@ if [[ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]]; then
   exit 1
 fi
 
-echo "==> Fetching $UPSTREAM_REMOTE"
-git fetch "$UPSTREAM_REMOTE" 2>&1 | grep -v "not our ref" || true
+if [[ "$REBASE" -eq 1 ]]; then
+  echo "==> Fetching $UPSTREAM_REMOTE"
+  git fetch "$UPSTREAM_REMOTE" 2>&1 | grep -v "not our ref" || true
 
-behind="$(git rev-list --count "HEAD..${UPSTREAM_REMOTE}/main")"
-echo "==> $behind new upstream commit(s)"
-if [[ "$behind" -gt 0 ]]; then
-  echo "==> Rebasing $BRANCH onto ${UPSTREAM_REMOTE}/main"
-  if ! git rebase "${UPSTREAM_REMOTE}/main"; then
-    echo "error: rebase conflict — resolve manually (git rebase --continue), then re-run" >&2
-    exit 1
+  behind="$(git rev-list --count "HEAD..${UPSTREAM_REMOTE}/main")"
+  echo "==> $behind new upstream commit(s)"
+  if [[ "$behind" -gt 0 ]]; then
+    echo "==> Rebasing $BRANCH onto ${UPSTREAM_REMOTE}/main"
+    if ! git rebase "${UPSTREAM_REMOTE}/main"; then
+      echo "error: rebase conflict — resolve manually (git rebase --continue), then re-run" >&2
+      exit 1
+    fi
   fi
+else
+  echo "==> Skipping upstream rebase (--no-rebase); building $(git rev-parse --short HEAD)"
 fi
 
 echo "==> Syncing submodules + GhosttyKit"
