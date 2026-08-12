@@ -2,9 +2,12 @@
 # Update "/Applications/cmux (Albert's version).app" from this fork.
 #
 # Pipeline: fetch upstream -> rebase albert/patches onto origin/main ->
-# sync submodules + prebuilt GhosttyKit -> tagged Debug build -> rebadge the
+# sync submodules + prebuilt GhosttyKit -> tagged Release build -> rebadge the
 # app to Albert's install identity -> sign -> install with a timestamped
 # backup -> push the branch to the fork.
+#
+# The installed app runs for days at a time, so it is built Release even though
+# scripts/reload.sh stays on Debug for iteration.
 #
 # The install identity is the original remote-click tagged build this app
 # grew out of: keeping the bundle id preserves session state, settings, and
@@ -23,6 +26,7 @@ BRANCH="albert/patches"
 UPSTREAM_REMOTE="origin"
 FORK_REMOTE="fork"
 BUILD_TAG="albert-update"
+CONFIGURATION="Release"
 INSTALL_APP="/Applications/cmux (Albert's version).app"
 INSTALL_NAME="cmux (Albert's version)"
 INSTALL_BUNDLE_ID="com.cmuxterm.app.debug.remote.click"
@@ -59,10 +63,10 @@ echo "==> Syncing submodules + GhosttyKit"
 git submodule update --init --recursive
 "$SCRIPT_DIR/ensure-ghosttykit.sh"
 
-echo "==> Building (tag: $BUILD_TAG)"
-"$SCRIPT_DIR/reload.sh" --tag "$BUILD_TAG"
+echo "==> Building (tag: $BUILD_TAG, configuration: $CONFIGURATION)"
+"$SCRIPT_DIR/reload.sh" --tag "$BUILD_TAG" --configuration "$CONFIGURATION"
 
-BUILT_APP="$HOME/Library/Developer/Xcode/DerivedData/cmux-${BUILD_TAG}/Build/Products/Debug/cmux DEV ${BUILD_TAG}.app"
+BUILT_APP="$HOME/Library/Developer/Xcode/DerivedData/cmux-${BUILD_TAG}/Build/Products/${CONFIGURATION}/cmux DEV ${BUILD_TAG}.app"
 if [[ ! -d "$BUILT_APP" ]]; then
   echo "error: built app not found at $BUILT_APP" >&2
   exit 1
