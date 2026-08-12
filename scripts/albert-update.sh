@@ -2,12 +2,9 @@
 # Update "/Applications/cmux (Albert's version).app" from this fork.
 #
 # Pipeline: fetch upstream -> rebase albert/patches onto origin/main ->
-# sync submodules + prebuilt GhosttyKit -> tagged Release build -> rebadge the
+# sync submodules + prebuilt GhosttyKit -> tagged build -> rebadge the
 # app to Albert's install identity -> sign -> install with a timestamped
 # backup -> push the branch to the fork.
-#
-# The installed app runs for days at a time, so it is built Release even though
-# scripts/reload.sh stays on Debug for iteration.
 #
 # The install identity is the original remote-click tagged build this app
 # grew out of: keeping the bundle id preserves session state, settings, and
@@ -26,7 +23,10 @@ BRANCH="albert/patches"
 UPSTREAM_REMOTE="origin"
 FORK_REMOTE="fork"
 BUILD_TAG="albert-update"
-CONFIGURATION="Release"
+# Release needs project signing work first: its configuration is CODE_SIGN_STYLE
+# Manual with an empty DEVELOPMENT_TEAM, so the build fails on the app's
+# get-task-allow entitlement. Pass --configuration Release once that is sorted.
+CONFIGURATION="Debug"
 INSTALL_APP="/Applications/cmux (Albert's version).app"
 INSTALL_NAME="cmux (Albert's version)"
 INSTALL_BUNDLE_ID="com.cmuxterm.app.debug.remote.click"
