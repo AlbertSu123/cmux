@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/zig-darwin-sdk.sh
+source "$SCRIPT_DIR/lib/zig-darwin-sdk.sh"
 
 cd "$PROJECT_DIR"
 
@@ -220,6 +222,7 @@ else
     echo "==> Seeding cache from prebuilt GhosttyKit.xcframework"
   else
     echo "==> Building GhosttyKit.xcframework (this may take a few minutes)..."
+    zig_darwin_sdk_setup
     (
       cd ghostty
       zig build -Dcrash-report-subdir="$GHOSTTYKIT_CRASH_REPORT_SUBDIR" -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
@@ -242,11 +245,19 @@ else
   echo "==> Cached GhosttyKit.xcframework at $CACHE_XCFRAMEWORK"
 fi
 
-MACOS_ARCHIVE="$CACHE_XCFRAMEWORK/macos-arm64_x86_64/libghostty.a"
-if [[ -f "$MACOS_ARCHIVE" ]]; then
+# Ghostty renamed this archive from libghostty.a to ghostty-internal.a; match
+# whatever it ships so the refresh below cannot silently stop happening.
+MACOS_ARCHIVE=""
+for candidate in "$CACHE_XCFRAMEWORK/macos-arm64_x86_64"/*.a; do
+  if [[ -f "$candidate" ]]; then
+    MACOS_ARCHIVE="$candidate"
+    break
+  fi
+done
+if [[ -n "$MACOS_ARCHIVE" ]]; then
   # Xcode 26 can fail to resolve symbols from Ghostty's universal static archive
   # until its ranlib index is refreshed after reuse or copy.
-  echo "==> Refreshing libghostty archive index..."
+  echo "==> Refreshing $(basename "$MACOS_ARCHIVE") archive index..."
   if ! command -v xcrun >/dev/null 2>&1; then
     echo "error: xcrun is required to refresh libghostty archive index." >&2
     exit 1
