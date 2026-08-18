@@ -4504,13 +4504,42 @@ private final class FilePreviewPointerObserverView: NSView {
 private struct CSVPreviewDocument {
     struct Row: Identifiable {
         let id: Int
-        let cells: [String]
+        var cells: [String]
     }
 
-    let header: [String]
-    let rows: [Row]
+    var header: [String]
+    var rows: [Row]
     let columnWidths: [CGFloat]
     let truncated: Bool
+    var delimiter: Character = ","
+
+    /// Editing is refused on a truncated load: the in-memory table holds only
+    /// the first `maxRows` records, so writing it back would silently delete
+    /// every row past the cap.
+    var isEditable: Bool { !truncated }
+
+    mutating func setCell(rowID: Int, column: Int, to value: String) {
+        guard let index = rows.firstIndex(where: { $0.id == rowID }) else { return }
+        var cells = rows[index].cells
+        if cells.count <= column {
+            cells.append(contentsOf: Array(repeating: "", count: column - cells.count + 1))
+        }
+        cells[column] = value
+        rows[index].cells = cells
+    }
+
+    mutating func deleteRow(id: Int) {
+        rows.removeAll { $0.id == id }
+    }
+
+    func save(to url: URL) throws {
+        try FilePreviewCSVSerializer.write(
+            header: header,
+            rows: rows.map(\.cells),
+            delimiter: delimiter,
+            to: url
+        )
+    }
 
     static func load(url: URL) -> CSVPreviewDocument? {
         let maxBytes = 25_000_000
@@ -4533,7 +4562,13 @@ private struct CSVPreviewDocument {
             }
             widths.append(min(max(CGFloat(longest) * 7.2 + 18, 56), 420))
         }
-        return CSVPreviewDocument(header: first, rows: rows, columnWidths: widths, truncated: truncated)
+        return CSVPreviewDocument(
+            header: first,
+            rows: rows,
+            columnWidths: widths,
+            truncated: truncated,
+            delimiter: delimiter
+        )
     }
 
     private static func parse(
@@ -4654,6 +4689,11 @@ private struct FilePreviewCSVView: View {
     let backgroundColor: NSColor
     let foregroundColor: NSColor
 
+    private struct EditingCell: Equatable {
+        let rowID: Int
+        let column: Int
+    }
+
     private struct ColumnResize: Equatable {
         let column: Int
         let baseWidth: CGFloat
@@ -4669,6 +4709,11 @@ private struct FilePreviewCSVView: View {
     @State private var layout = FilePreviewCSVColumnLayout(widths: [])
     @State private var resize: ColumnResize?
     @State private var columnDrag: ColumnDrag?
+    @State private var selectedRowID: Int?
+    @State private var editingCell: EditingCell?
+    @State private var editText: String = ""
+    @State private var saveError: String?
+    @FocusState private var editorFocused: Bool
 
     var body: some View {
         Group {
@@ -4692,6 +4737,9 @@ private struct FilePreviewCSVView: View {
             layout = FilePreviewCSVColumnLayout(widths: loaded?.columnWidths ?? [])
             resize = nil
             columnDrag = nil
+            selectedRowID = nil
+            editingCell = nil
+            saveError = nil
         }
     }
 
@@ -4734,8 +4782,8 @@ private struct FilePreviewCSVView: View {
             }
             if document.truncated {
                 Text(String(
-                    localized: "filePreview.csv.truncated",
-                    defaultValue: "Showing the first \(document.rows.count) rows"
+                    localized: "filePreview.csv.truncatedReadOnly",
+                    defaultValue: "Showing the first \(document.rows.count) rows — editing is disabled so the rest of the file is not lost"
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -4743,6 +4791,26 @@ private struct FilePreviewCSVView: View {
                 .padding(.vertical, 4)
                 .background(.bar)
             }
+            if let saveError {
+                Text(String(
+                    localized: "filePreview.csv.saveFailed",
+                    defaultValue: "Couldn't save: \(saveError)"
+                ))
+                .font(.caption)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
+        }
+        .focusable()
+        .onKeyPress(.delete) {
+            let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+            guard flags.contains(.command), editingCell == nil, selectedRowID != nil else {
+                return .ignored
+            }
+            deleteSelectedRow()
+            return .handled
         }
     }
 
@@ -4825,16 +4893,91 @@ private struct FilePreviewCSVView: View {
     private func cellRow(_ row: CSVPreviewDocument.Row, document: CSVPreviewDocument) -> some View {
         HStack(spacing: 0) {
             ForEach(Array(layout.order.enumerated()), id: \.element) { _, column in
-                cell(
-                    text: column < row.cells.count ? row.cells[column] : "",
-                    width: layout.width(ofColumn: column)
-                )
+                if editingCell == EditingCell(rowID: row.id, column: column) {
+                    cellEditor(rowID: row.id, column: column)
+                } else {
+                    cell(
+                        text: column < row.cells.count ? row.cells[column] : "",
+                        width: layout.width(ofColumn: column),
+                        rowID: row.id,
+                        column: column,
+                        isEditable: document.isEditable
+                    )
+                }
             }
+        }
+        .background(
+            selectedRowID == row.id
+                ? Color.accentColor.opacity(0.18)
+                : Color.clear
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { selectedRowID = row.id }
+    }
+
+    private func cellEditor(rowID: Int, column: Int) -> some View {
+        TextField("", text: $editText)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .frame(width: layout.width(ofColumn: column), alignment: .leading)
+            .background(Color(nsColor: backgroundColor))
+            .overlay(Rectangle().strokeBorder(Color.accentColor, lineWidth: 2))
+            .focused($editorFocused)
+            .onSubmit { commitEdit() }
+            .onExitCommand { editingCell = nil }
+            .onAppear { editorFocused = true }
+    }
+
+    private func beginEdit(rowID: Int, column: Int, current: String) {
+        editText = current
+        editingCell = EditingCell(rowID: rowID, column: column)
+        selectedRowID = rowID
+    }
+
+    private func commitEdit() {
+        guard var doc = document, let target = editingCell else { return }
+        doc.setCell(rowID: target.rowID, column: target.column, to: editText)
+        editingCell = nil
+        persist(doc)
+    }
+
+    private func deleteSelectedRow() {
+        guard var doc = document, doc.isEditable, let rowID = selectedRowID else { return }
+        let index = doc.rows.firstIndex { $0.id == rowID }
+        doc.deleteRow(id: rowID)
+        // Keep the selection on the row that slid up into the deleted slot.
+        if let index {
+            selectedRowID = doc.rows.indices.contains(index)
+                ? doc.rows[index].id
+                : doc.rows.last?.id
+        }
+        editingCell = nil
+        persist(doc)
+    }
+
+    /// Apply an edited table to the view and write it through to disk. On a
+    /// write failure the in-memory table is left as the user sees it and the
+    /// error is surfaced, rather than silently reverting their edit.
+    private func persist(_ updated: CSVPreviewDocument) {
+        document = updated
+        do {
+            try updated.save(to: URL(fileURLWithPath: panel.filePath))
+            saveError = nil
+        } catch {
+            saveError = error.localizedDescription
         }
     }
 
     @ViewBuilder
-    private func cell(text: String, width: CGFloat) -> some View {
+    private func cell(
+        text: String,
+        width: CGFloat,
+        rowID: Int,
+        column: Int,
+        isEditable: Bool
+    ) -> some View {
         if let url = FilePreviewCSVCellLink.url(for: text) {
             Text(text)
                 .font(.system(size: 12))
@@ -4845,16 +4988,61 @@ private struct FilePreviewCSVView: View {
                 .foregroundStyle(Color.accentColor)
                 .help(String(
                     localized: "filePreview.csv.linkHint",
-                    defaultValue: "⌘-click to open"
+                    defaultValue: "⌘-click to open in cmux · ⌥⌘-click for your default browser"
                 ))
                 .padding(.horizontal, 9)
                 .padding(.vertical, 4)
                 .frame(width: width, alignment: .leading)
                 .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    guard isEditable else { return }
+                    beginEdit(rowID: rowID, column: column, current: text)
+                }
                 .onTapGesture {
                     let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
-                    guard flags.contains(.command) else { return }
-                    NSWorkspace.shared.open(url)
+                    guard flags.contains(.command) else {
+                        selectedRowID = rowID
+                        return
+                    }
+                    // Option escapes to the system browser for sites that need
+                    // Chrome's extensions or an existing signed-in session.
+                    if flags.contains(.option) {
+                        CmuxLinkOpener.openExternally(url)
+                    } else {
+                        CmuxLinkOpener.open(url)
+                    }
+                }
+                .contextMenu {
+                    Button(String(
+                        localized: "filePreview.csv.openInCmuxBrowser",
+                        defaultValue: "Open in cmux Browser"
+                    )) { CmuxLinkOpener.open(url) }
+                    Button(String(
+                        localized: "filePreview.csv.openInDefaultBrowser",
+                        defaultValue: "Open in Default Browser"
+                    )) { CmuxLinkOpener.openExternally(url) }
+                    Divider()
+                    Button(String(
+                        localized: "filePreview.csv.copyLink",
+                        defaultValue: "Copy Link"
+                    )) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                    }
+                    if isEditable {
+                        Divider()
+                        Button(String(
+                            localized: "filePreview.csv.editCell",
+                            defaultValue: "Edit Cell"
+                        )) { beginEdit(rowID: rowID, column: column, current: text) }
+                        Button(String(
+                            localized: "filePreview.csv.deleteRow",
+                            defaultValue: "Delete Row"
+                        ), role: .destructive) {
+                            selectedRowID = rowID
+                            deleteSelectedRow()
+                        }
+                    }
                 }
         } else {
             Text(text)
@@ -4866,6 +5054,27 @@ private struct FilePreviewCSVView: View {
                 .padding(.horizontal, 9)
                 .padding(.vertical, 4)
                 .frame(width: width, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    guard isEditable else { return }
+                    beginEdit(rowID: rowID, column: column, current: text)
+                }
+                .onTapGesture { selectedRowID = rowID }
+                .contextMenu {
+                    if isEditable {
+                        Button(String(
+                            localized: "filePreview.csv.editCell",
+                            defaultValue: "Edit Cell"
+                        )) { beginEdit(rowID: rowID, column: column, current: text) }
+                        Button(String(
+                            localized: "filePreview.csv.deleteRow",
+                            defaultValue: "Delete Row"
+                        ), role: .destructive) {
+                            selectedRowID = rowID
+                            deleteSelectedRow()
+                        }
+                    }
+                }
         }
     }
 }

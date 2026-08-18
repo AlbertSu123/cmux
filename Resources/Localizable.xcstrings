@@ -104888,6 +104888,125 @@
         }
       }
     },
+    "filePreview.csv.copyLink": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Link"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リンクをコピー"
+          }
+        }
+      }
+    },
+    "filePreview.csv.openInCmuxBrowser": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in cmux Browser"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "cmuxブラウザで開く"
+          }
+        }
+      }
+    },
+    "filePreview.csv.openInDefaultBrowser": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in Default Browser"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "既定のブラウザで開く"
+          }
+        }
+      }
+    },
+    "filePreview.csv.deleteRow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Row"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "行を削除"
+          }
+        }
+      }
+    },
+    "filePreview.csv.editCell": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit Cell"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "セルを編集"
+          }
+        }
+      }
+    },
+    "filePreview.csv.saveFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存できませんでした: %@"
+          }
+        }
+      }
+    },
+    "filePreview.csv.truncatedReadOnly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing the first %lld rows \u2014 editing is disabled so the rest of the file is not lost"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最初の%lld行を表示しています。ファイルの残りを失わないため編集は無効です"
+          }
+        }
+      }
+    },
     "filePreview.csv.columnHint": {
       "extractionState": "manual",
       "localizations": {
@@ -104911,13 +105030,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "\u2318-click to open"
+            "value": "\u2318-click to open in cmux \u00b7 \u2325\u2318-click for your default browser"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "⌘クリックで開く"
+            "value": "⌘クリックでcmuxで開く・⌥⌘クリックで既定のブラウザ"
           }
         }
       }

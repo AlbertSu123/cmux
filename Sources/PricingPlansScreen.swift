@@ -107,10 +107,7 @@ enum ProUpgradePresenter {
 
         // Fallbacks so the entrypoint never silently no-ops: a browser tab in
         // the current window, then the system browser.
-        if AppDelegate.shared?.openBrowserAndFocusAddressBar(url: url) != nil {
-            return
-        }
-        NSWorkspace.shared.open(url)
+        CmuxLinkOpener.open(url)
     }
 
     @MainActor

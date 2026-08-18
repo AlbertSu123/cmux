@@ -558,6 +558,7 @@ C0DE71B10000000000000001 /* AppDelegate+AgentChatNotifications.swift in Sources 
 		1A0B0C0D0E0F101112132013 /* CmuxIrohTransport in Frameworks */ = {isa = PBXBuildFile; productRef = 1A0B0C0D0E0F101112132012 /* CmuxIrohTransport */; };
 		1A0B0C0D0E0F101112132014 /* CmuxIrohTransport in Frameworks */ = {isa = PBXBuildFile; productRef = 1A0B0C0D0E0F101112132012 /* CmuxIrohTransport */; };
 		E7E00000000000000000000B /* CmuxLifecycleEventPublishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E00000000000000000000C /* CmuxLifecycleEventPublishing.swift */; };
+		8D75D6157C22B0F98977C656 /* CmuxLinkOpener.swift in Sources */ = {isa = PBXBuildFile; fileRef = A43A8239B5272D5356599309 /* CmuxLinkOpener.swift */; };
 		2F0C07000000000000000002 /* CmuxMainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F0C07000000000000000001 /* CmuxMainWindow.swift */; };
 		D36090010000000000000005 /* CmuxMainWindowConstrainFrameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36090010000000000000006 /* CmuxMainWindowConstrainFrameTests.swift */; };
 		D36090020000000000000005 /* CmuxMainWindowFullScreenCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36090020000000000000006 /* CmuxMainWindowFullScreenCapabilityTests.swift */; };
@@ -789,6 +790,7 @@ C0DE71B10000000000000001 /* AppDelegate+AgentChatNotifications.swift in Sources 
 		22E1039E00FBFD429112491E /* FilePreviewCSVCellLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471EBEB12BFEB6A4213B94D2 /* FilePreviewCSVCellLink.swift */; };
 		8A794F544CE5682C8DBD7335 /* FilePreviewCSVColumnLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90A239FE35F2DD02180818C0 /* FilePreviewCSVColumnLayout.swift */; };
 		C7C85FE54AF8FD4C447C9A08 /* FilePreviewCSVColumnLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2856BC48AE7525EF99A59700 /* FilePreviewCSVColumnLayoutTests.swift */; };
+		6B2E3A4028F8D70791D205BF /* FilePreviewCSVSerializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DB52C597CCE107BFEFB1491 /* FilePreviewCSVSerializer.swift */; };
 		A5001432A5001432A5001432 /* FilePreviewFocusCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001431A5001431A5001431 /* FilePreviewFocusCoordinator.swift */; };
 		01EE5DC99896BA30240EF1B5 /* FilePreviewImageSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1450569A797AA7937677D9 /* FilePreviewImageSession.swift */; };
 		C0DE49950000000000000001 /* FilePreviewKindResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE49950000000000000002 /* FilePreviewKindResolverTests.swift */; };
@@ -2518,6 +2520,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 		C0DE34020000000000000004 /* CmuxHelpResource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/CmuxHelpResource.swift; sourceTree = "<group>"; };
 		C0DE46010000000000000002 /* CMUXInstalledExtensionSidebarHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXInstalledExtensionSidebarHostView.swift; sourceTree = "<group>"; };
 		E7E00000000000000000000C /* CmuxLifecycleEventPublishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxLifecycleEventPublishing.swift; sourceTree = "<group>"; };
+		A43A8239B5272D5356599309 /* CmuxLinkOpener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxLinkOpener.swift; sourceTree = "<group>"; };
 		2F0C07000000000000000001 /* CmuxMainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/CmuxMainWindow.swift; sourceTree = "<group>"; };
 		D36090010000000000000006 /* CmuxMainWindowConstrainFrameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxMainWindowConstrainFrameTests.swift; sourceTree = "<group>"; };
 		D36090020000000000000006 /* CmuxMainWindowFullScreenCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxMainWindowFullScreenCapabilityTests.swift; sourceTree = "<group>"; };
@@ -2716,6 +2719,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 		471EBEB12BFEB6A4213B94D2 /* FilePreviewCSVCellLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewCSVCellLink.swift; sourceTree = "<group>"; };
 		90A239FE35F2DD02180818C0 /* FilePreviewCSVColumnLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewCSVColumnLayout.swift; sourceTree = "<group>"; };
 		2856BC48AE7525EF99A59700 /* FilePreviewCSVColumnLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePreviewCSVColumnLayoutTests.swift; sourceTree = "<group>"; };
+		4DB52C597CCE107BFEFB1491 /* FilePreviewCSVSerializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewCSVSerializer.swift; sourceTree = "<group>"; };
 		A5001431A5001431A5001431 /* FilePreviewFocusCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewFocusCoordinator.swift; sourceTree = "<group>"; };
 		7D1450569A797AA7937677D9 /* FilePreviewImageSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewImageSession.swift; sourceTree = "<group>"; };
 		C0DE49950000000000000002 /* FilePreviewKindResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePreviewKindResolverTests.swift; sourceTree = "<group>"; };
@@ -4535,6 +4539,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				E30760000000000000000001 /* TmuxWorkspacePaneOverlayView.swift */,
 				A5001014 /* GhosttyConfig.swift */,
 				C4041001000000000000001A /* CommandClickFileOpenRouter.swift */,
+				A43A8239B5272D5356599309 /* CmuxLinkOpener.swift */,
 				C40410010000000000000020 /* FileExplorerDoubleClickActionSettings.swift */,
 				A5001015 /* GhosttyTerminalView.swift */,
 				816400000000000000000002 /* GhosttyScrollView.swift */,
@@ -5006,6 +5011,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				81E3615490F822CA0C8527C9 /* FilePreviewNativeViewSessions.swift */,
 				D5D8322021F224A1538F8988 /* FilePreviewPDFSession.swift */,
 				471EBEB12BFEB6A4213B94D2 /* FilePreviewCSVCellLink.swift */,
+				4DB52C597CCE107BFEFB1491 /* FilePreviewCSVSerializer.swift */,
 				90A239FE35F2DD02180818C0 /* FilePreviewCSVColumnLayout.swift */,
 				7D1450569A797AA7937677D9 /* FilePreviewImageSession.swift */,
 				64D7B3C5A409C0B3EDD002CE /* FilePreviewMediaSession.swift */,
@@ -6599,6 +6605,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				C0DE34020000000000000002 /* CmuxHelpResource.swift in Sources */,
 				C0DE46010000000000000001 /* CMUXInstalledExtensionSidebarHostView.swift in Sources */,
 				E7E00000000000000000000B /* CmuxLifecycleEventPublishing.swift in Sources */,
+				8D75D6157C22B0F98977C656 /* CmuxLinkOpener.swift in Sources */,
 				2F0C07000000000000000002 /* CmuxMainWindow.swift in Sources */,
 				CA1F0A01CA1F0A01CA1F0A01 /* CmuxModalAlertPresentation.swift in Sources */,
 				C54860110000000000000001 /* CmuxNavigationResolution.swift in Sources */,
@@ -6735,6 +6742,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				A5001441A5001441A5001441 /* FileOpenSocketSupport.swift in Sources */,
 				22E1039E00FBFD429112491E /* FilePreviewCSVCellLink.swift in Sources */,
 				8A794F544CE5682C8DBD7335 /* FilePreviewCSVColumnLayout.swift in Sources */,
+				6B2E3A4028F8D70791D205BF /* FilePreviewCSVSerializer.swift in Sources */,
 				A5001432A5001432A5001432 /* FilePreviewFocusCoordinator.swift in Sources */,
 				01EE5DC99896BA30240EF1B5 /* FilePreviewImageSession.swift in Sources */,
 				A5001447A5001447A5001447 /* FilePreviewMagnifyingPDFView.swift in Sources */,

@@ -176,3 +176,65 @@ import Testing
         #expect(FilePreviewCSVCellLink.url(for: cell) == nil)
     }
 }
+
+@Suite struct FilePreviewCSVSerializerTests {
+    @Test func leavesPlainFieldsUnquoted() {
+        #expect(FilePreviewCSVSerializer.field("alamb", delimiter: ",") == "alamb")
+    }
+
+    @Test func quotesFieldsContainingTheDelimiter() {
+        #expect(
+            FilePreviewCSVSerializer.field("Boston, USA", delimiter: ",") == "\"Boston, USA\""
+        )
+        // The same text is safe in a TSV.
+        #expect(FilePreviewCSVSerializer.field("Boston, USA", delimiter: "\t") == "Boston, USA")
+    }
+
+    @Test func doublesEmbeddedQuotes() {
+        #expect(
+            FilePreviewCSVSerializer.field("say \"hi\"", delimiter: ",") == "\"say \"\"hi\"\"\""
+        )
+    }
+
+    @Test func quotesFieldsWithNewlinesOrEdgeWhitespace() {
+        #expect(FilePreviewCSVSerializer.field("a\nb", delimiter: ",") == "\"a\nb\"")
+        #expect(FilePreviewCSVSerializer.field(" pad", delimiter: ",") == "\" pad\"")
+        #expect(FilePreviewCSVSerializer.field("pad ", delimiter: ",") == "\"pad \"")
+    }
+
+    @Test func serializesHeaderAndRows() {
+        let text = FilePreviewCSVSerializer.serialize(
+            header: ["name", "note"],
+            rows: [["alamb", "Boston, USA"], ["orlp", "pdqsort"]],
+            delimiter: ","
+        )
+        #expect(text == "name,note\nalamb,\"Boston, USA\"\norlp,pdqsort\n")
+    }
+
+    @Test func roundTripsThroughAFile() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cmux-csv-\(UUID().uuidString).csv")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try FilePreviewCSVSerializer.write(
+            header: ["a", "b"],
+            rows: [["1", "x,y"], ["2", "he said \"no\""]],
+            delimiter: ",",
+            to: url
+        )
+        let written = try String(contentsOf: url, encoding: .utf8)
+        #expect(written == "a,b\n1,\"x,y\"\n2,\"he said \"\"no\"\"\"\n")
+    }
+
+    @Test func writeReplacesExistingContentRatherThanAppending() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cmux-csv-\(UUID().uuidString).csv")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try Data("stale,content\nrow,row\n".utf8).write(to: url)
+        try FilePreviewCSVSerializer.write(
+            header: ["a"], rows: [["1"]], delimiter: ",", to: url
+        )
+        #expect(try String(contentsOf: url, encoding: .utf8) == "a\n1\n")
+    }
+}
