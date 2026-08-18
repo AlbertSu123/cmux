@@ -4600,14 +4600,75 @@ private struct CSVPreviewDocument {
     }
 }
 
+/// Grab strip on a header cell's trailing edge.
+///
+/// Owns its own hover state so the resize cursor is popped exactly as many
+/// times as it was pushed — an unbalanced `NSCursor.pop()` corrupts the shared
+/// cursor stack for the whole app, which is easy to trigger by scrolling the
+/// grid out from under a hovered handle.
+private struct ColumnResizeHandle: View {
+    let width: () -> CGFloat
+    let onChange: (CGFloat, CGFloat) -> Void
+    let onEnd: () -> Void
+    let storedBase: () -> CGFloat?
+
+    @State private var didPushCursor = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 10)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    guard !didPushCursor else { return }
+                    didPushCursor = true
+                    NSCursor.resizeLeftRight.push()
+                } else if didPushCursor {
+                    didPushCursor = false
+                    NSCursor.pop()
+                }
+            }
+            .onDisappear {
+                if didPushCursor {
+                    didPushCursor = false
+                    NSCursor.pop()
+                }
+            }
+            // High priority so grabbing the edge resizes instead of starting the
+            // parent header cell's reorder drag.
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let base = storedBase() ?? width()
+                        onChange(base, value.translation.width)
+                    }
+                    .onEnded { _ in onEnd() }
+            )
+    }
+}
+
 private struct FilePreviewCSVView: View {
     @ObservedObject var panel: FilePreviewPanel
     let isVisibleInUI: Bool
     let backgroundColor: NSColor
     let foregroundColor: NSColor
 
+    private struct ColumnResize: Equatable {
+        let column: Int
+        let baseWidth: CGFloat
+    }
+
+    private struct ColumnDrag: Equatable {
+        let displayIndex: Int
+        var translation: CGFloat
+    }
+
     @State private var document: CSVPreviewDocument?
     @State private var loadFailed = false
+    @State private var layout = FilePreviewCSVColumnLayout(widths: [])
+    @State private var resize: ColumnResize?
+    @State private var columnDrag: ColumnDrag?
 
     var body: some View {
         Group {
@@ -4628,6 +4689,9 @@ private struct FilePreviewCSVView: View {
             }.value
             document = loaded
             loadFailed = loaded == nil
+            layout = FilePreviewCSVColumnLayout(widths: loaded?.columnWidths ?? [])
+            resize = nil
+            columnDrag = nil
         }
     }
 
@@ -4646,7 +4710,7 @@ private struct FilePreviewCSVView: View {
     }
 
     private func grid(for document: CSVPreviewDocument) -> some View {
-        let totalWidth = document.columnWidths.reduce(0, +)
+        let totalWidth = layout.totalWidth
         let gridLine = Color(nsColor: foregroundColor).opacity(0.08)
         return VStack(spacing: 0) {
             ScrollView([.horizontal, .vertical], showsIndicators: true) {
@@ -4684,14 +4748,12 @@ private struct FilePreviewCSVView: View {
 
     private func headerRow(for document: CSVPreviewDocument, gridLine: Color) -> some View {
         HStack(spacing: 0) {
-            ForEach(Array(document.columnWidths.enumerated()), id: \.offset) { column, width in
-                Text(column < document.header.count ? document.header[column] : "")
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .frame(width: width, alignment: .leading)
+            ForEach(Array(layout.order.enumerated()), id: \.element) { displayIndex, column in
+                headerCell(
+                    title: column < document.header.count ? document.header[column] : "",
+                    column: column,
+                    displayIndex: displayIndex
+                )
             }
         }
         .background(.bar)
@@ -4700,20 +4762,110 @@ private struct FilePreviewCSVView: View {
         }
     }
 
+    private func headerCell(title: String, column: Int, displayIndex: Int) -> some View {
+        let isDragging = columnDrag?.displayIndex == displayIndex
+        return Text(title)
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .frame(width: layout.width(ofColumn: column), alignment: .leading)
+            .background(isDragging ? Color(nsColor: foregroundColor).opacity(0.12) : Color.clear)
+            .offset(x: isDragging ? (columnDrag?.translation ?? 0) : 0)
+            .zIndex(isDragging ? 1 : 0)
+            .help(String(
+                localized: "filePreview.csv.columnHint",
+                defaultValue: "Drag to reorder · drag the edge to resize"
+            ))
+            .gesture(reorderGesture(displayIndex: displayIndex))
+            .overlay(alignment: .trailing) {
+                resizeHandle(column: column)
+            }
+    }
+
+    private func reorderGesture(displayIndex: Int) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                guard resize == nil else { return }
+                if columnDrag?.displayIndex == displayIndex {
+                    columnDrag?.translation = value.translation.width
+                } else if columnDrag == nil {
+                    columnDrag = ColumnDrag(displayIndex: displayIndex, translation: value.translation.width)
+                }
+            }
+            .onEnded { value in
+                guard let drag = columnDrag, drag.displayIndex == displayIndex else {
+                    columnDrag = nil
+                    return
+                }
+                let destination = layout.dropIndex(
+                    draggingDisplayIndex: displayIndex,
+                    translation: value.translation.width
+                )
+                layout.move(fromDisplayIndex: displayIndex, toDisplayIndex: destination)
+                columnDrag = nil
+            }
+    }
+
+    private func resizeHandle(column: Int) -> some View {
+        ColumnResizeHandle(
+            width: { layout.width(ofColumn: column) },
+            onChange: { base, translation in
+                if resize?.column != column {
+                    resize = ColumnResize(column: column, baseWidth: base)
+                }
+                layout.resize(column: column, to: base + translation)
+            },
+            onEnd: { resize = nil },
+            storedBase: { resize?.column == column ? resize?.baseWidth : nil }
+        )
+    }
+
     private func cellRow(_ row: CSVPreviewDocument.Row, document: CSVPreviewDocument) -> some View {
         HStack(spacing: 0) {
-            ForEach(Array(document.columnWidths.enumerated()), id: \.offset) { column, width in
-                let cell = column < row.cells.count ? row.cells[column] : ""
-                Text(cell)
-                    .font(.system(size: 12))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .help(cell)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .frame(width: width, alignment: .leading)
+            ForEach(Array(layout.order.enumerated()), id: \.element) { _, column in
+                cell(
+                    text: column < row.cells.count ? row.cells[column] : "",
+                    width: layout.width(ofColumn: column)
+                )
             }
+        }
+    }
+
+    @ViewBuilder
+    private func cell(text: String, width: CGFloat) -> some View {
+        if let url = FilePreviewCSVCellLink.url(for: text) {
+            Text(text)
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .underline()
+                .foregroundStyle(Color.accentColor)
+                .help(String(
+                    localized: "filePreview.csv.linkHint",
+                    defaultValue: "⌘-click to open"
+                ))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .frame(width: width, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+                    guard flags.contains(.command) else { return }
+                    NSWorkspace.shared.open(url)
+                }
+        } else {
+            Text(text)
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(text)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .frame(width: width, alignment: .leading)
         }
     }
 }

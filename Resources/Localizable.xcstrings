@@ -104888,6 +104888,74 @@
         }
       }
     },
+    "filePreview.csv.columnHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag to reorder \u00b7 drag the edge to resize"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドラッグで並べ替え・端をドラッグで幅を変更"
+          }
+        }
+      }
+    },
+    "filePreview.csv.linkHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\u2318-click to open"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "⌘クリックで開く"
+          }
+        }
+      }
+    },
+    "filePreview.csv.truncated": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing the first %lld rows"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最初の%lld行を表示しています"
+          }
+        }
+      }
+    },
+    "filePreview.csv.unparseable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't display this file as a table"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このファイルを表として表示できませんでした"
+          }
+        }
+      }
+    },
     "filePreview.openExternally": {
       "extractionState": "manual",
       "localizations": {
