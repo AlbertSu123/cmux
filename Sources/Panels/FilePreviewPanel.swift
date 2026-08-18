@@ -5182,6 +5182,17 @@ private struct FilePreviewCSVView: View {
                 .padding(.vertical, 4)
                 .frame(width: width, alignment: .leading)
                 .contentShape(Rectangle())
+                .simultaneousGesture(
+                    // Runs alongside the double-click edit gesture rather than
+                    // competing with it: as a plain onTapGesture this is
+                    // suppressed while SwiftUI waits for a possible second
+                    // click, so a single click never recorded the selection and
+                    // cmd-delete had no row to act on.
+                    TapGesture().onEnded {
+                        selectedRowID = rowID
+                        gridFocused = true
+                    }
+                )
                 .onTapGesture(count: 2) {
                     guard isEditable else { return }
                     beginEdit(rowID: rowID, column: column, current: text)
@@ -5244,13 +5255,20 @@ private struct FilePreviewCSVView: View {
                 .padding(.vertical, 4)
                 .frame(width: width, alignment: .leading)
                 .contentShape(Rectangle())
+                .simultaneousGesture(
+                    // Runs alongside the double-click edit gesture rather than
+                    // competing with it: as a plain onTapGesture this is
+                    // suppressed while SwiftUI waits for a possible second
+                    // click, so a single click never recorded the selection and
+                    // cmd-delete had no row to act on.
+                    TapGesture().onEnded {
+                        selectedRowID = rowID
+                        gridFocused = true
+                    }
+                )
                 .onTapGesture(count: 2) {
                     guard isEditable else { return }
                     beginEdit(rowID: rowID, column: column, current: text)
-                }
-                .onTapGesture {
-                    selectedRowID = rowID
-                    gridFocused = true
                 }
                 .contextMenu {
                     if isEditable {
