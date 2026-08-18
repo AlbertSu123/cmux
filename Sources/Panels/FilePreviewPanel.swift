@@ -4747,6 +4747,9 @@ private struct FilePreviewCSVView: View {
     @State private var selectedRowID: Int?
     @State private var selectedColumn: Int?
     @State private var checkedRowIDs: Set<Int> = []
+    /// Anchor for shift-click range selection: the last row checked without
+    /// shift held.
+    @State private var checkAnchorRowID: Int?
     @State private var editingCell: EditingCell?
     @State private var editText: String = ""
     @State private var saveError: String?
@@ -4792,6 +4795,7 @@ private struct FilePreviewCSVView: View {
             selectedRowID = nil
             selectedColumn = nil
             checkedRowIDs = []
+            checkAnchorRowID = nil
             editingCell = nil
             saveError = nil
             undoStack.removeAll()
@@ -4868,6 +4872,7 @@ private struct FilePreviewCSVView: View {
                         defaultValue: "Clear"
                     )) {
                         checkedRowIDs = []
+                        checkAnchorRowID = nil
                     }
                     .controlSize(.small)
                 }
@@ -5062,27 +5067,52 @@ private struct FilePreviewCSVView: View {
     /// Width of the leading select gutter, matched by the header's spacer.
     private static let selectGutterWidth: CGFloat = 26
 
-    private func selectBox(rowID: Int, isEditable: Bool) -> some View {
+    private func selectBox(rowID: Int, document: CSVPreviewDocument) -> some View {
         Image(systemName: checkedRowIDs.contains(rowID) ? "checkmark.square.fill" : "square")
             .font(.system(size: 11))
             .foregroundStyle(checkedRowIDs.contains(rowID) ? Color.accentColor : .secondary)
             .frame(width: Self.selectGutterWidth)
             .contentShape(Rectangle())
+            .help(String(
+                localized: "filePreview.csv.selectRowHint",
+                defaultValue: "Click to select · shift-click to select a range"
+            ))
             .onTapGesture {
-                guard isEditable else { return }
-                if checkedRowIDs.contains(rowID) {
-                    checkedRowIDs.remove(rowID)
-                } else {
-                    checkedRowIDs.insert(rowID)
-                }
-                selectedRowID = rowID
-                gridFocused = true
+                guard document.isEditable else { return }
+                toggleCheck(rowID: rowID, in: document)
             }
+    }
+
+    /// Toggle one row, or extend the checked set from the anchor when shift is
+    /// held. Modifiers come from the current event here, which is the click
+    /// itself for pointer input.
+    private func toggleCheck(rowID: Int, in document: CSVPreviewDocument) {
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        if flags.contains(.shift),
+           let anchor = checkAnchorRowID,
+           let anchorIndex = document.rows.firstIndex(where: { $0.id == anchor }),
+           let targetIndex = document.rows.firstIndex(where: { $0.id == rowID }) {
+            let range = anchorIndex <= targetIndex
+                ? anchorIndex...targetIndex
+                : targetIndex...anchorIndex
+            checkedRowIDs.formUnion(document.rows[range].map(\.id))
+        } else {
+            if checkedRowIDs.contains(rowID) {
+                checkedRowIDs.remove(rowID)
+            } else {
+                checkedRowIDs.insert(rowID)
+            }
+            // Only a plain click moves the anchor, so a shift-click always
+            // measures from where the user last started.
+            checkAnchorRowID = rowID
+        }
+        selectedRowID = rowID
+        gridFocused = true
     }
 
     private func cellRow(_ row: CSVPreviewDocument.Row, document: CSVPreviewDocument) -> some View {
         HStack(spacing: 0) {
-            selectBox(rowID: row.id, isEditable: document.isEditable)
+            selectBox(rowID: row.id, document: document)
             ForEach(Array(layout.order.enumerated()), id: \.element) { _, column in
                 if editingCell == EditingCell(rowID: row.id, column: column) {
                     cellEditor(rowID: row.id, column: column)

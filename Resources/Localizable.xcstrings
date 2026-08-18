@@ -105058,6 +105058,23 @@
         }
       }
     },
+    "filePreview.csv.selectRowHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click to select \u00b7 shift-click to select a range"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリックで選択・シフトクリックで範囲選択"
+          }
+        }
+      }
+    },
     "filePreview.csv.selectAll": {
       "extractionState": "manual",
       "localizations": {
