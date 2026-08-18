@@ -4672,26 +4672,41 @@ private struct CSVPreviewDocument {
 
 /// Grab strip on a header cell's trailing edge.
 ///
+/// The drag is previewed with a guide line and only committed on release. The
+/// grid below is a `LazyVStack` of up to 50k rows with a pinned header, and
+/// writing a width on every mouse event re-runs that whole lazy layout — the
+/// header un-pins and the visible rows are torn down and rebuilt, which reads
+/// as the grid flickering. Deferring the commit means the grid lays out twice
+/// per resize instead of once per event, so there is nothing left to flicker.
+///
 /// Owns its own hover state so the resize cursor is popped exactly as many
 /// times as it was pushed — an unbalanced `NSCursor.pop()` corrupts the shared
 /// cursor stack for the whole app, which is easy to trigger by scrolling the
 /// grid out from under a hovered handle.
 private struct ColumnResizeHandle: View {
     let width: () -> CGFloat
-    let onChange: (CGFloat, CGFloat) -> Void
-    let onEnd: () -> Void
-    let storedBase: () -> CGFloat?
+    let onBegin: () -> Void
+    let onCommit: (CGFloat) -> Void
 
     @State private var didPushCursor = false
     @State private var isHovering = false
-    /// Screen x the drag started at. See the gesture below for why the anchor
-    /// is kept in screen space.
+    /// Screen x the drag started at, and the width the column had then. See the
+    /// gesture below for why the anchor is kept in screen space.
     @State private var dragAnchorX: CGFloat?
+    @State private var dragBaseWidth: CGFloat?
+    /// Width the drag currently proposes. Held here rather than in the grid's
+    /// layout so a drag update invalidates this handle alone.
+    @State private var proposedWidth: CGFloat?
 
     /// Visible width of the drawn grip line.
     private static let lineWidth: CGFloat = 2
     /// Hit area, wider than the line so the grip is easy to catch.
     private static let hitWidth: CGFloat = 14
+    /// The guide is clipped by the grid's scroll viewport, so it only has to
+    /// out-measure any viewport the grid can be given.
+    private static let guideHeight: CGFloat = 4000
+
+    private var isDragging: Bool { dragAnchorX != nil }
 
     var body: some View {
         // A drawn grip rather than an invisible strip: the handle needs to be
@@ -4701,23 +4716,12 @@ private struct ColumnResizeHandle: View {
             .frame(width: Self.lineWidth)
             .frame(width: Self.hitWidth)
             .contentShape(Rectangle())
+            .overlay(alignment: .top) { guide }
             .onHover { inside in
                 isHovering = inside
-                if inside {
-                    guard !didPushCursor else { return }
-                    didPushCursor = true
-                    NSCursor.resizeLeftRight.push()
-                } else if didPushCursor {
-                    didPushCursor = false
-                    NSCursor.pop()
-                }
+                syncCursor(dragging: isDragging)
             }
-            .onDisappear {
-                if didPushCursor {
-                    didPushCursor = false
-                    NSCursor.pop()
-                }
-            }
+            .onDisappear { pushCursor(false) }
             // High priority so grabbing the grip resizes instead of starting the
             // parent header cell's reorder drag.
             //
@@ -4728,28 +4732,69 @@ private struct ColumnResizeHandle: View {
             // column by `t` moves the grip right by `t` and the next event
             // reports `D - t` instead of `D`. That is a unity-gain feedback
             // loop — the width alternates between `base` and `base + D` on
-            // consecutive frames, which is the shake. Screen coordinates cannot
+            // consecutive frames, which is a shake. Screen coordinates cannot
             // move with the value being dragged, so the loop cannot form.
             .highPriorityGesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { _ in
                         let mouseX = NSEvent.mouseLocation.x
-                        guard let anchor = dragAnchorX else {
+                        guard let anchor = dragAnchorX, let base = dragBaseWidth else {
                             dragAnchorX = mouseX
+                            dragBaseWidth = width()
+                            proposedWidth = width()
+                            syncCursor(dragging: true)
+                            onBegin()
                             return
                         }
-                        let base = storedBase() ?? width()
-                        onChange(base, mouseX - anchor)
+                        // Moves the guide only — the column keeps its width
+                        // until the drag ends.
+                        proposedWidth = FilePreviewCSVColumnLayout.clamped(base + (mouseX - anchor))
                     }
                     .onEnded { _ in
+                        let committed = proposedWidth ?? width()
                         dragAnchorX = nil
-                        onEnd()
+                        dragBaseWidth = nil
+                        proposedWidth = nil
+                        syncCursor(dragging: false)
+                        onCommit(committed)
                     }
             )
     }
 
+    /// The guide marks where the trailing edge will land, so it is offset by
+    /// the width the drag proposes rather than by the raw pointer delta: past
+    /// the clamp the pointer keeps moving and the edge does not.
+    @ViewBuilder
+    private var guide: some View {
+        if let dragBaseWidth, let proposedWidth {
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: Self.lineWidth, height: Self.guideHeight)
+                .offset(x: proposedWidth - dragBaseWidth)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// `dragging` is passed rather than read back from state: the callers set
+    /// it in the same closure, and a stale read on the end path would strand a
+    /// pushed cursor.
+    private func syncCursor(dragging: Bool) {
+        pushCursor(isHovering || dragging)
+    }
+
+    /// Push and pop in matched pairs, since the cursor stack is process-wide.
+    private func pushCursor(_ shouldPush: Bool) {
+        guard shouldPush != didPushCursor else { return }
+        didPushCursor = shouldPush
+        if shouldPush {
+            NSCursor.resizeLeftRight.push()
+        } else {
+            NSCursor.pop()
+        }
+    }
+
     private var gripColor: Color {
-        isHovering ? Color.accentColor : Color.secondary.opacity(0.35)
+        isHovering || isDragging ? Color.accentColor : Color.secondary.opacity(0.35)
     }
 }
 
@@ -4764,11 +4809,6 @@ private struct FilePreviewCSVView: View {
         let column: Int
     }
 
-    private struct ColumnResize: Equatable {
-        let column: Int
-        let baseWidth: CGFloat
-    }
-
     private struct ColumnDrag: Equatable {
         let displayIndex: Int
         var translation: CGFloat
@@ -4777,7 +4817,9 @@ private struct FilePreviewCSVView: View {
     @State private var document: CSVPreviewDocument?
     @State private var loadFailed = false
     @State private var layout = FilePreviewCSVColumnLayout(widths: [])
-    @State private var resize: ColumnResize?
+    /// Column whose edge is being dragged, if any. The in-flight width lives in
+    /// the handle, not here, so a drag does not re-lay out the grid.
+    @State private var resizingColumn: Int?
     @State private var columnDrag: ColumnDrag?
     @State private var selectedRowID: Int?
     @State private var selectedColumn: Int?
@@ -4825,7 +4867,7 @@ private struct FilePreviewCSVView: View {
             document = loaded
             loadFailed = loaded == nil
             layout = FilePreviewCSVColumnLayout(widths: loaded?.columnWidths ?? [])
-            resize = nil
+            resizingColumn = nil
             columnDrag = nil
             selectedRowID = nil
             selectedColumn = nil
@@ -5064,7 +5106,7 @@ private struct FilePreviewCSVView: View {
     private func reorderGesture(displayIndex: Int) -> some Gesture {
         DragGesture(minimumDistance: 6)
             .onChanged { value in
-                guard resize == nil else { return }
+                guard resizingColumn == nil else { return }
                 if columnDrag?.displayIndex == displayIndex {
                     columnDrag?.translation = value.translation.width
                 } else if columnDrag == nil {
@@ -5088,14 +5130,11 @@ private struct FilePreviewCSVView: View {
     private func resizeHandle(column: Int) -> some View {
         ColumnResizeHandle(
             width: { layout.width(ofColumn: column) },
-            onChange: { base, translation in
-                if resize?.column != column {
-                    resize = ColumnResize(column: column, baseWidth: base)
-                }
-                layout.resize(column: column, to: base + translation)
-            },
-            onEnd: { resize = nil },
-            storedBase: { resize?.column == column ? resize?.baseWidth : nil }
+            onBegin: { resizingColumn = column },
+            onCommit: { newWidth in
+                layout.resize(column: column, to: newWidth)
+                resizingColumn = nil
+            }
         )
     }
 
