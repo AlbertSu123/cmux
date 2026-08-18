@@ -238,3 +238,70 @@ import Testing
         #expect(try String(contentsOf: url, encoding: .utf8) == "a\n1\n")
     }
 }
+
+@Suite struct FilePreviewCSVUndoStackTests {
+    private typealias Stack = FilePreviewCSVUndoStack<String>
+
+    @Test func startsEmpty() {
+        let stack = Stack()
+        #expect(!stack.canUndo)
+        #expect(stack.count == 0)
+    }
+
+    @Test func popsMostRecentEntryFirst() throws {
+        var stack = Stack()
+        stack.record(.setCell(rowID: 1, column: 0, previous: "first"))
+        stack.record(.setCell(rowID: 2, column: 1, previous: "second"))
+        #expect(stack.count == 2)
+
+        let popped = stack.popLast()
+        guard case let .setCell(rowID, column, previous) = try #require(popped) else {
+            Issue.record("expected a setCell entry")
+            return
+        }
+        #expect(rowID == 2)
+        #expect(column == 1)
+        #expect(previous == "second")
+        #expect(stack.count == 1)
+    }
+
+    @Test func retainsRowPayloadForDeletions() throws {
+        var stack = Stack()
+        stack.record(.insertRow(index: 3, row: "deleted-row"))
+        let popped = stack.popLast()
+        guard case let .insertRow(index, row) = try #require(popped) else {
+            Issue.record("expected an insertRow entry")
+            return
+        }
+        #expect(index == 3)
+        #expect(row == "deleted-row")
+    }
+
+    @Test func dropsOldestEntriesPastTheLimit() throws {
+        var stack = Stack()
+        for i in 0..<(Stack.limit + 25) {
+            stack.record(.setCell(rowID: i, column: 0, previous: "\(i)"))
+        }
+        #expect(stack.count == Stack.limit)
+        // The newest entry survives; the oldest 25 were evicted.
+        let popped = stack.popLast()
+        guard case let .setCell(rowID, _, _) = try #require(popped) else {
+            Issue.record("expected a setCell entry")
+            return
+        }
+        #expect(rowID == Stack.limit + 24)
+    }
+
+    @Test func removeAllClearsHistory() {
+        var stack = Stack()
+        stack.record(.setCell(rowID: 1, column: 0, previous: "x"))
+        stack.removeAll()
+        #expect(!stack.canUndo)
+        #expect(stack.popLast() == nil)
+    }
+
+    @Test func popOnEmptyStackReturnsNil() {
+        var stack = Stack()
+        #expect(stack.popLast() == nil)
+    }
+}

@@ -4514,8 +4514,8 @@ private struct CSVPreviewDocument {
     var delimiter: Character = ","
 
     /// Editing is refused on a truncated load: the in-memory table holds only
-    /// the first `maxRows` records, so writing it back would silently delete
-    /// every row past the cap.
+    /// the first `maxRows` records (50k), so writing it back would silently
+    /// delete every row past the cap.
     var isEditable: Bool { !truncated }
 
     mutating func setCell(rowID: Int, column: Int, to value: String) {
@@ -4532,6 +4532,16 @@ private struct CSVPreviewDocument {
         rows.removeAll { $0.id == id }
     }
 
+    mutating func insertRow(_ row: Row, at index: Int) {
+        rows.insert(row, at: min(max(index, 0), rows.count))
+    }
+
+    func cell(rowID: Int, column: Int) -> String {
+        guard let row = rows.first(where: { $0.id == rowID }),
+              column < row.cells.count else { return "" }
+        return row.cells[column]
+    }
+
     func save(to url: URL) throws {
         try FilePreviewCSVSerializer.write(
             header: header,
@@ -4542,8 +4552,11 @@ private struct CSVPreviewDocument {
     }
 
     static func load(url: URL) -> CSVPreviewDocument? {
-        let maxBytes = 25_000_000
-        let maxRows = 5000
+        // 50k rows covers every table we expect to edit in place; the byte cap
+        // rises with it so a wide 50k-row export is not rejected before the row
+        // cap can apply.
+        let maxBytes = 250_000_000
+        let maxRows = 50_000
         guard let data = try? Data(contentsOf: url), data.count <= maxBytes else { return nil }
         guard let text = String(data: data, encoding: .utf8)
             ?? String(data: data, encoding: .isoLatin1) else { return nil }
@@ -4713,6 +4726,7 @@ private struct FilePreviewCSVView: View {
     @State private var editingCell: EditingCell?
     @State private var editText: String = ""
     @State private var saveError: String?
+    @State private var undoStack = FilePreviewCSVUndoStack<CSVPreviewDocument.Row>()
     @FocusState private var editorFocused: Bool
 
     var body: some View {
@@ -4740,6 +4754,7 @@ private struct FilePreviewCSVView: View {
             selectedRowID = nil
             editingCell = nil
             saveError = nil
+            undoStack.removeAll()
         }
     }
 
@@ -4810,6 +4825,14 @@ private struct FilePreviewCSVView: View {
                 return .ignored
             }
             deleteSelectedRow()
+            return .handled
+        }
+        .onKeyPress(KeyEquivalent("z")) {
+            let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+            guard flags.contains(.command), !flags.contains(.shift), editingCell == nil,
+                  undoStack.canUndo
+            else { return .ignored }
+            undoLastEdit()
             return .handled
         }
     }
@@ -4938,20 +4961,40 @@ private struct FilePreviewCSVView: View {
 
     private func commitEdit() {
         guard var doc = document, let target = editingCell else { return }
-        doc.setCell(rowID: target.rowID, column: target.column, to: editText)
+        let previous = doc.cell(rowID: target.rowID, column: target.column)
         editingCell = nil
+        guard previous != editText else { return }
+        undoStack.record(.setCell(rowID: target.rowID, column: target.column, previous: previous))
+        doc.setCell(rowID: target.rowID, column: target.column, to: editText)
         persist(doc)
     }
 
     private func deleteSelectedRow() {
         guard var doc = document, doc.isEditable, let rowID = selectedRowID else { return }
         let index = doc.rows.firstIndex { $0.id == rowID }
+        if let index {
+            undoStack.record(.insertRow(index: index, row: doc.rows[index]))
+        }
         doc.deleteRow(id: rowID)
         // Keep the selection on the row that slid up into the deleted slot.
         if let index {
             selectedRowID = doc.rows.indices.contains(index)
                 ? doc.rows[index].id
                 : doc.rows.last?.id
+        }
+        editingCell = nil
+        persist(doc)
+    }
+
+    private func undoLastEdit() {
+        guard var doc = document, doc.isEditable, let entry = undoStack.popLast() else { return }
+        switch entry {
+        case let .setCell(rowID, column, previous):
+            doc.setCell(rowID: rowID, column: column, to: previous)
+            selectedRowID = rowID
+        case let .insertRow(index, row):
+            doc.insertRow(row, at: index)
+            selectedRowID = row.id
         }
         editingCell = nil
         persist(doc)

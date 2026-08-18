@@ -791,6 +791,7 @@ C0DE71B10000000000000001 /* AppDelegate+AgentChatNotifications.swift in Sources 
 		8A794F544CE5682C8DBD7335 /* FilePreviewCSVColumnLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90A239FE35F2DD02180818C0 /* FilePreviewCSVColumnLayout.swift */; };
 		C7C85FE54AF8FD4C447C9A08 /* FilePreviewCSVColumnLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2856BC48AE7525EF99A59700 /* FilePreviewCSVColumnLayoutTests.swift */; };
 		6B2E3A4028F8D70791D205BF /* FilePreviewCSVSerializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DB52C597CCE107BFEFB1491 /* FilePreviewCSVSerializer.swift */; };
+		57AB81CB47B9DB89268D79D3 /* FilePreviewCSVUndoStack.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A139A942AB8FDA5E67F6BD /* FilePreviewCSVUndoStack.swift */; };
 		A5001432A5001432A5001432 /* FilePreviewFocusCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001431A5001431A5001431 /* FilePreviewFocusCoordinator.swift */; };
 		01EE5DC99896BA30240EF1B5 /* FilePreviewImageSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1450569A797AA7937677D9 /* FilePreviewImageSession.swift */; };
 		C0DE49950000000000000001 /* FilePreviewKindResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE49950000000000000002 /* FilePreviewKindResolverTests.swift */; };
@@ -2720,6 +2721,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 		90A239FE35F2DD02180818C0 /* FilePreviewCSVColumnLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewCSVColumnLayout.swift; sourceTree = "<group>"; };
 		2856BC48AE7525EF99A59700 /* FilePreviewCSVColumnLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePreviewCSVColumnLayoutTests.swift; sourceTree = "<group>"; };
 		4DB52C597CCE107BFEFB1491 /* FilePreviewCSVSerializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewCSVSerializer.swift; sourceTree = "<group>"; };
+		B7A139A942AB8FDA5E67F6BD /* FilePreviewCSVUndoStack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewCSVUndoStack.swift; sourceTree = "<group>"; };
 		A5001431A5001431A5001431 /* FilePreviewFocusCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewFocusCoordinator.swift; sourceTree = "<group>"; };
 		7D1450569A797AA7937677D9 /* FilePreviewImageSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewImageSession.swift; sourceTree = "<group>"; };
 		C0DE49950000000000000002 /* FilePreviewKindResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePreviewKindResolverTests.swift; sourceTree = "<group>"; };
@@ -5012,6 +5014,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				D5D8322021F224A1538F8988 /* FilePreviewPDFSession.swift */,
 				471EBEB12BFEB6A4213B94D2 /* FilePreviewCSVCellLink.swift */,
 				4DB52C597CCE107BFEFB1491 /* FilePreviewCSVSerializer.swift */,
+				B7A139A942AB8FDA5E67F6BD /* FilePreviewCSVUndoStack.swift */,
 				90A239FE35F2DD02180818C0 /* FilePreviewCSVColumnLayout.swift */,
 				7D1450569A797AA7937677D9 /* FilePreviewImageSession.swift */,
 				64D7B3C5A409C0B3EDD002CE /* FilePreviewMediaSession.swift */,
@@ -6743,6 +6746,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				22E1039E00FBFD429112491E /* FilePreviewCSVCellLink.swift in Sources */,
 				8A794F544CE5682C8DBD7335 /* FilePreviewCSVColumnLayout.swift in Sources */,
 				6B2E3A4028F8D70791D205BF /* FilePreviewCSVSerializer.swift in Sources */,
+				57AB81CB47B9DB89268D79D3 /* FilePreviewCSVUndoStack.swift in Sources */,
 				A5001432A5001432A5001432 /* FilePreviewFocusCoordinator.swift in Sources */,
 				01EE5DC99896BA30240EF1B5 /* FilePreviewImageSession.swift in Sources */,
 				A5001447A5001447A5001447 /* FilePreviewMagnifyingPDFView.swift in Sources */,
