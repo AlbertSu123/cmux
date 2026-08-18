@@ -4755,6 +4755,7 @@ private struct FilePreviewCSVView: View {
     @State private var saveTask: Task<Void, Never>?
     @Environment(\.controlActiveState) private var controlActiveState
     @FocusState private var editorFocused: Bool
+    @FocusState private var gridFocused: Bool
 
     var body: some View {
         Group {
@@ -4869,20 +4870,26 @@ private struct FilePreviewCSVView: View {
             }
         }
         .focusable()
-        .onKeyPress(.delete) {
-            let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
-            guard flags.contains(.command), editingCell == nil, selectedRowID != nil else {
-                return .ignored
-            }
-            deleteSelectedRow()
-            return .handled
+        .focused($gridFocused)
+        // Clicking anywhere in the grid must hand it keyboard focus, or none of
+        // the key bindings below ever fire: .focusable() only makes a view
+        // eligible for focus on macOS, it does not take focus on click.
+        .onTapGesture { gridFocused = true }
+        // Modifiers come from SwiftUI's KeyPress, not NSApp.currentEvent:
+        // during key handling currentEvent is not reliably the key event, which
+        // is why Backport.onKeyPress threads keyPress.modifiers through too.
+        .onKeyPress(keys: [.delete, .deleteForward], phases: [.down, .repeat]) { keyPress in
+            deleteRowKeyPress(modifiers: keyPress.modifiers)
         }
-        .onKeyPress(.leftArrow) { moveSelectedColumn(by: -1) }
-        .onKeyPress(.rightArrow) { moveSelectedColumn(by: 1) }
-        .onKeyPress(KeyEquivalent("z")) {
-            let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
-            guard flags.contains(.command), editingCell == nil else { return .ignored }
-            if flags.contains(.shift) {
+        .onKeyPress(keys: [.leftArrow], phases: [.down, .repeat]) { keyPress in
+            moveSelectedColumn(by: -1, modifiers: keyPress.modifiers)
+        }
+        .onKeyPress(keys: [.rightArrow], phases: [.down, .repeat]) { keyPress in
+            moveSelectedColumn(by: 1, modifiers: keyPress.modifiers)
+        }
+        .onKeyPress(keys: [KeyEquivalent("z")], phases: [.down]) { keyPress in
+            guard keyPress.modifiers.contains(.command), editingCell == nil else { return .ignored }
+            if keyPress.modifiers.contains(.shift) {
                 guard redoStack.canUndo else { return .ignored }
                 redoLastEdit()
             } else {
@@ -4930,7 +4937,10 @@ private struct FilePreviewCSVView: View {
                 defaultValue: "Click to select, then ⌘← / ⌘→ to move · drag to reorder · drag the edge to resize"
             ))
             .contentShape(Rectangle())
-            .onTapGesture { selectedColumn = column }
+            .onTapGesture {
+                selectedColumn = column
+                gridFocused = true
+            }
             .gesture(reorderGesture(displayIndex: displayIndex))
             .overlay(alignment: .trailing) {
                 resizeHandle(column: column)
@@ -4997,7 +5007,10 @@ private struct FilePreviewCSVView: View {
                 : Color.clear
         )
         .contentShape(Rectangle())
-        .onTapGesture { selectedRowID = row.id }
+        .onTapGesture {
+            selectedRowID = row.id
+            gridFocused = true
+        }
     }
 
     private func cellEditor(rowID: Int, column: Int) -> some View {
@@ -5011,7 +5024,10 @@ private struct FilePreviewCSVView: View {
             .overlay(Rectangle().strokeBorder(Color.accentColor, lineWidth: 2))
             .focused($editorFocused)
             .onSubmit { commitEdit() }
-            .onExitCommand { editingCell = nil }
+            .onExitCommand {
+                editingCell = nil
+                gridFocused = true
+            }
             .onAppear { editorFocused = true }
     }
 
@@ -5025,6 +5041,7 @@ private struct FilePreviewCSVView: View {
         guard var doc = document, let target = editingCell else { return }
         let previous = doc.cell(rowID: target.rowID, column: target.column)
         editingCell = nil
+        gridFocused = true
         guard previous != editText else { return }
         undoStack.record(.setCell(rowID: target.rowID, column: target.column, previous: previous))
         redoStack.removeAll()
@@ -5050,12 +5067,22 @@ private struct FilePreviewCSVView: View {
         persist(doc)
     }
 
+    /// Delete the selected row on command-delete or control-delete. Both are
+    /// accepted because either reads as "remove this" depending on habit.
+    private func deleteRowKeyPress(modifiers: EventModifiers) -> KeyPress.Result {
+        guard modifiers.contains(.command) || modifiers.contains(.control),
+              editingCell == nil,
+              selectedRowID != nil
+        else { return .ignored }
+        deleteSelectedRow()
+        return .handled
+    }
+
     /// Nudge the selected column one slot. Requires command so the arrow keys
     /// stay available for anything else in the panel, and is ignored while a
     /// cell editor is open so it cannot fight the text field's caret movement.
-    private func moveSelectedColumn(by offset: Int) -> KeyPress.Result {
-        let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
-        guard flags.contains(.command), editingCell == nil, let column = selectedColumn else {
+    private func moveSelectedColumn(by offset: Int, modifiers: EventModifiers) -> KeyPress.Result {
+        guard modifiers.contains(.command), editingCell == nil, let column = selectedColumn else {
             return .ignored
         }
         return layout.shift(column: column, by: offset) ? .handled : .ignored
@@ -5163,6 +5190,7 @@ private struct FilePreviewCSVView: View {
                     let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
                     guard flags.contains(.command) else {
                         selectedRowID = rowID
+                        gridFocused = true
                         return
                     }
                     // Option escapes to the system browser for sites that need
@@ -5220,7 +5248,10 @@ private struct FilePreviewCSVView: View {
                     guard isEditable else { return }
                     beginEdit(rowID: rowID, column: column, current: text)
                 }
-                .onTapGesture { selectedRowID = rowID }
+                .onTapGesture {
+                    selectedRowID = rowID
+                    gridFocused = true
+                }
                 .contextMenu {
                     if isEditable {
                         Button(String(
