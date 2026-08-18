@@ -4684,6 +4684,9 @@ private struct ColumnResizeHandle: View {
 
     @State private var didPushCursor = false
     @State private var isHovering = false
+    /// Screen x the drag started at. See the gesture below for why the anchor
+    /// is kept in screen space.
+    @State private var dragAnchorX: CGFloat?
 
     /// Visible width of the drawn grip line.
     private static let lineWidth: CGFloat = 2
@@ -4717,13 +4720,31 @@ private struct ColumnResizeHandle: View {
             }
             // High priority so grabbing the grip resizes instead of starting the
             // parent header cell's reorder drag.
+            //
+            // The drag is measured against the screen rather than against
+            // `value.translation`, because this grip rides the trailing edge of
+            // the very column it resizes: `DragGesture` subtracts a start
+            // location captured once in the grip's own space, so widening the
+            // column by `t` moves the grip right by `t` and the next event
+            // reports `D - t` instead of `D`. That is a unity-gain feedback
+            // loop — the width alternates between `base` and `base + D` on
+            // consecutive frames, which is the shake. Screen coordinates cannot
+            // move with the value being dragged, so the loop cannot form.
             .highPriorityGesture(
                 DragGesture(minimumDistance: 1)
-                    .onChanged { value in
+                    .onChanged { _ in
+                        let mouseX = NSEvent.mouseLocation.x
+                        guard let anchor = dragAnchorX else {
+                            dragAnchorX = mouseX
+                            return
+                        }
                         let base = storedBase() ?? width()
-                        onChange(base, value.translation.width)
+                        onChange(base, mouseX - anchor)
                     }
-                    .onEnded { _ in onEnd() }
+                    .onEnded { _ in
+                        dragAnchorX = nil
+                        onEnd()
+                    }
             )
     }
 
