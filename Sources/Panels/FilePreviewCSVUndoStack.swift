@@ -13,6 +13,9 @@ struct FilePreviewCSVUndoStack<Row> {
         case setCell(rowID: Int, column: Int, previous: String)
         /// Re-insert a deleted row at the index it came from.
         case insertRow(index: Int, row: Row)
+        /// Remove a row again — the inverse of `insertRow`, used when redoing
+        /// a deletion that was undone.
+        case removeRow(rowID: Int)
     }
 
     /// Deep enough for a long editing session, bounded so history cannot grow

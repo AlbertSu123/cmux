@@ -4536,6 +4536,28 @@ private struct CSVPreviewDocument {
         rows.insert(row, at: min(max(index, 0), rows.count))
     }
 
+    /// Apply a history entry and return the entry that reverses it, so undo and
+    /// redo share one implementation instead of drifting apart.
+    mutating func apply(
+        _ entry: FilePreviewCSVUndoStack<Row>.Entry
+    ) -> FilePreviewCSVUndoStack<Row>.Entry? {
+        switch entry {
+        case let .setCell(rowID, column, previous):
+            guard rows.contains(where: { $0.id == rowID }) else { return nil }
+            let current = cell(rowID: rowID, column: column)
+            setCell(rowID: rowID, column: column, to: previous)
+            return .setCell(rowID: rowID, column: column, previous: current)
+        case let .insertRow(index, row):
+            insertRow(row, at: index)
+            return .removeRow(rowID: row.id)
+        case let .removeRow(rowID):
+            guard let index = rows.firstIndex(where: { $0.id == rowID }) else { return nil }
+            let row = rows[index]
+            deleteRow(id: rowID)
+            return .insertRow(index: index, row: row)
+        }
+    }
+
     func cell(rowID: Int, column: Int) -> String {
         guard let row = rows.first(where: { $0.id == rowID }),
               column < row.cells.count else { return "" }
@@ -4727,6 +4749,10 @@ private struct FilePreviewCSVView: View {
     @State private var editText: String = ""
     @State private var saveError: String?
     @State private var undoStack = FilePreviewCSVUndoStack<CSVPreviewDocument.Row>()
+    @State private var redoStack = FilePreviewCSVUndoStack<CSVPreviewDocument.Row>()
+    @State private var hasUnsavedEdits = false
+    @State private var saveTask: Task<Void, Never>?
+    @Environment(\.controlActiveState) private var controlActiveState
     @FocusState private var editorFocused: Bool
 
     var body: some View {
@@ -4741,6 +4767,15 @@ private struct FilePreviewCSVView: View {
             }
         }
         .background(Color(nsColor: backgroundColor))
+        .onChange(of: panel.filePath) { oldPath, _ in
+            // Write the outgoing file, not the incoming one.
+            flushSave(to: oldPath)
+        }
+        .onChange(of: controlActiveState) { _, state in
+            // Panel lost key focus — the user has moved on, so write now.
+            if state != .key { flushSave() }
+        }
+        .onDisappear { flushSave() }
         .task(id: panel.filePath) {
             let url = URL(fileURLWithPath: panel.filePath)
             let loaded = await Task.detached(priority: .userInitiated) {
@@ -4755,6 +4790,8 @@ private struct FilePreviewCSVView: View {
             editingCell = nil
             saveError = nil
             undoStack.removeAll()
+            redoStack.removeAll()
+            hasUnsavedEdits = false
         }
     }
 
@@ -4806,6 +4843,17 @@ private struct FilePreviewCSVView: View {
                 .padding(.vertical, 4)
                 .background(.bar)
             }
+            if hasUnsavedEdits && saveError == nil {
+                Text(String(
+                    localized: "filePreview.csv.unsaved",
+                    defaultValue: "Unsaved edits — saved when you click away"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
             if let saveError {
                 Text(String(
                     localized: "filePreview.csv.saveFailed",
@@ -4829,10 +4877,14 @@ private struct FilePreviewCSVView: View {
         }
         .onKeyPress(KeyEquivalent("z")) {
             let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
-            guard flags.contains(.command), !flags.contains(.shift), editingCell == nil,
-                  undoStack.canUndo
-            else { return .ignored }
-            undoLastEdit()
+            guard flags.contains(.command), editingCell == nil else { return .ignored }
+            if flags.contains(.shift) {
+                guard redoStack.canUndo else { return .ignored }
+                redoLastEdit()
+            } else {
+                guard undoStack.canUndo else { return .ignored }
+                undoLastEdit()
+            }
             return .handled
         }
     }
@@ -4965,6 +5017,7 @@ private struct FilePreviewCSVView: View {
         editingCell = nil
         guard previous != editText else { return }
         undoStack.record(.setCell(rowID: target.rowID, column: target.column, previous: previous))
+        redoStack.removeAll()
         doc.setCell(rowID: target.rowID, column: target.column, to: editText)
         persist(doc)
     }
@@ -4974,6 +5027,7 @@ private struct FilePreviewCSVView: View {
         let index = doc.rows.firstIndex { $0.id == rowID }
         if let index {
             undoStack.record(.insertRow(index: index, row: doc.rows[index]))
+            redoStack.removeAll()
         }
         doc.deleteRow(id: rowID)
         // Keep the selection on the row that slid up into the deleted slot.
@@ -4988,25 +5042,68 @@ private struct FilePreviewCSVView: View {
 
     private func undoLastEdit() {
         guard var doc = document, doc.isEditable, let entry = undoStack.popLast() else { return }
-        switch entry {
-        case let .setCell(rowID, column, previous):
-            doc.setCell(rowID: rowID, column: column, to: previous)
-            selectedRowID = rowID
-        case let .insertRow(index, row):
-            doc.insertRow(row, at: index)
-            selectedRowID = row.id
-        }
+        guard let inverse = doc.apply(entry) else { return }
+        redoStack.record(inverse)
+        focusRow(for: entry)
         editingCell = nil
         persist(doc)
     }
 
-    /// Apply an edited table to the view and write it through to disk. On a
-    /// write failure the in-memory table is left as the user sees it and the
-    /// error is surfaced, rather than silently reverting their edit.
+    private func redoLastEdit() {
+        guard var doc = document, doc.isEditable, let entry = redoStack.popLast() else { return }
+        guard let inverse = doc.apply(entry) else { return }
+        undoStack.record(inverse)
+        focusRow(for: entry)
+        editingCell = nil
+        persist(doc)
+    }
+
+    private func focusRow(for entry: FilePreviewCSVUndoStack<CSVPreviewDocument.Row>.Entry) {
+        switch entry {
+        case let .setCell(rowID, _, _): selectedRowID = rowID
+        case let .insertRow(_, row): selectedRowID = row.id
+        case let .removeRow(rowID): if selectedRowID == rowID { selectedRowID = nil }
+        }
+    }
+
+    /// Apply an edited table to the view and schedule a write.
+    ///
+    /// Writing rewrites the whole file, so batching matters: at the 50k-row cap
+    /// a save-per-edit would rewrite ~25MB every time a cell is committed.
+    /// Edits land in memory immediately and are flushed when the panel goes
+    /// quiet — see `flushSave` for the paths that force one.
     private func persist(_ updated: CSVPreviewDocument) {
         document = updated
+        hasUnsavedEdits = true
+        scheduleSave()
+    }
+
+    /// Debounce a write so a burst of edits collapses into one rewrite. Bounded
+    /// and cancellable: each new edit replaces the pending task.
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            flushSave()
+        }
+    }
+
+    /// Write pending edits now. Called when the panel loses focus, when it
+    /// disappears, and before loading a different file, so edits cannot be
+    /// stranded in memory.
+    private func flushSave(to path: String? = nil) {
+        saveTask?.cancel()
+        saveTask = nil
+        guard hasUnsavedEdits, let document else { return }
+        // `path` is passed explicitly when the previewed file is changing: by
+        // the time onChange fires, panel.filePath is already the *new* file, so
+        // writing the in-memory table there would clobber it with the old
+        // file's contents.
+        let target = path ?? panel.filePath
         do {
-            try updated.save(to: URL(fileURLWithPath: panel.filePath))
+            try document.save(to: URL(fileURLWithPath: target))
+            hasUnsavedEdits = false
             saveError = nil
         } catch {
             saveError = error.localizedDescription

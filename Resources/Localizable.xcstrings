@@ -105007,6 +105007,23 @@
         }
       }
     },
+    "filePreview.csv.unsaved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsaved edits \u2014 saved when you click away"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未保存の編集 \u2014 フォーカスを外すと保存されます"
+          }
+        }
+      }
+    },
     "filePreview.csv.columnHint": {
       "extractionState": "manual",
       "localizations": {

@@ -305,3 +305,47 @@ import Testing
         #expect(stack.popLast() == nil)
     }
 }
+
+@Suite struct FilePreviewCSVRedoEntryTests {
+    private typealias Stack = FilePreviewCSVUndoStack<String>
+
+    @Test func removeRowEntryCarriesItsRowID() throws {
+        var stack = Stack()
+        stack.record(.removeRow(rowID: 42))
+        let popped = stack.popLast()
+        guard case let .removeRow(rowID) = try #require(popped) else {
+            Issue.record("expected a removeRow entry")
+            return
+        }
+        #expect(rowID == 42)
+    }
+
+    @Test func undoAndRedoStacksAreIndependent() throws {
+        var undo = Stack()
+        var redo = Stack()
+        undo.record(.setCell(rowID: 1, column: 0, previous: "before"))
+
+        // Undo pops from one stack and pushes the inverse onto the other.
+        let entry = undo.popLast()
+        _ = try #require(entry)
+        redo.record(.setCell(rowID: 1, column: 0, previous: "after"))
+
+        #expect(!undo.canUndo)
+        #expect(redo.canUndo)
+
+        let redone = redo.popLast()
+        guard case let .setCell(_, _, previous) = try #require(redone) else {
+            Issue.record("expected a setCell entry")
+            return
+        }
+        #expect(previous == "after")
+    }
+
+    @Test func redoHistoryIsBoundedLikeUndo() {
+        var stack = Stack()
+        for i in 0..<(Stack.limit + 10) {
+            stack.record(.removeRow(rowID: i))
+        }
+        #expect(stack.count == Stack.limit)
+    }
+}
