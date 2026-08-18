@@ -4683,13 +4683,23 @@ private struct ColumnResizeHandle: View {
     let storedBase: () -> CGFloat?
 
     @State private var didPushCursor = false
+    @State private var isHovering = false
+
+    /// Visible width of the drawn grip line.
+    private static let lineWidth: CGFloat = 2
+    /// Hit area, wider than the line so the grip is easy to catch.
+    private static let hitWidth: CGFloat = 14
 
     var body: some View {
+        // A drawn grip rather than an invisible strip: the handle needs to be
+        // findable before it can be grabbed.
         Rectangle()
-            .fill(Color.clear)
-            .frame(width: 10)
+            .fill(gripColor)
+            .frame(width: Self.lineWidth)
+            .frame(width: Self.hitWidth)
             .contentShape(Rectangle())
             .onHover { inside in
+                isHovering = inside
                 if inside {
                     guard !didPushCursor else { return }
                     didPushCursor = true
@@ -4705,23 +4715,20 @@ private struct ColumnResizeHandle: View {
                     NSCursor.pop()
                 }
             }
-            // High priority so grabbing the edge resizes instead of starting the
+            // High priority so grabbing the grip resizes instead of starting the
             // parent header cell's reorder drag.
-            //
-            // The drag is measured in global space on purpose. This handle sits
-            // on the column's trailing edge, so a local translation is measured
-            // against a frame that moves as the column resizes: widening shifts
-            // the handle right, which shrinks the reported translation, which
-            // narrows the column again. That feedback loop is what made a
-            // resize judder.
             .highPriorityGesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         let base = storedBase() ?? width()
                         onChange(base, value.translation.width)
                     }
                     .onEnded { _ in onEnd() }
             )
+    }
+
+    private var gripColor: Color {
+        isHovering ? Color.accentColor : Color.secondary.opacity(0.35)
     }
 }
 
