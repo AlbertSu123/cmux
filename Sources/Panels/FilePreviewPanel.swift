@@ -4707,8 +4707,15 @@ private struct ColumnResizeHandle: View {
             }
             // High priority so grabbing the edge resizes instead of starting the
             // parent header cell's reorder drag.
+            //
+            // The drag is measured in global space on purpose. This handle sits
+            // on the column's trailing edge, so a local translation is measured
+            // against a frame that moves as the column resizes: widening shifts
+            // the handle right, which shrinks the reported translation, which
+            // narrows the column again. That feedback loop is what made a
+            // resize judder.
             .highPriorityGesture(
-                DragGesture(minimumDistance: 1)
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
                         let base = storedBase() ?? width()
                         onChange(base, value.translation.width)

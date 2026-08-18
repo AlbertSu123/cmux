@@ -22,8 +22,11 @@ struct FilePreviewCSVColumnLayout: Equatable {
         self.order = Array(widths.indices)
     }
 
+    /// Clamp to the allowed range and snap to whole points. Sub-point widths
+    /// let a column oscillate between two rounded layouts on consecutive drag
+    /// updates, which reads as a shimmer while dragging.
     static func clamped(_ width: CGFloat) -> CGFloat {
-        min(max(width, minimumWidth), maximumWidth)
+        min(max(width.rounded(), minimumWidth), maximumWidth)
     }
 
     var columnCount: Int { widths.count }
