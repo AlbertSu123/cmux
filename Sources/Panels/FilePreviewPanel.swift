@@ -5209,14 +5209,14 @@ private struct FilePreviewCSVView: View {
                     if flags.contains(.option) {
                         CmuxLinkOpener.openExternally(url)
                     } else {
-                        CmuxLinkOpener.open(url)
+                        CmuxLinkOpener.open(url, inWorkspace: panel.workspaceId)
                     }
                 }
                 .contextMenu {
                     Button(String(
                         localized: "filePreview.csv.openInCmuxBrowser",
                         defaultValue: "Open in cmux Browser"
-                    )) { CmuxLinkOpener.open(url) }
+                    )) { CmuxLinkOpener.open(url, inWorkspace: panel.workspaceId) }
                     Button(String(
                         localized: "filePreview.csv.openInDefaultBrowser",
                         defaultValue: "Open in Default Browser"

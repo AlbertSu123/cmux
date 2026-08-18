@@ -16,8 +16,22 @@ enum CmuxLinkOpener {
         case systemBrowser
     }
 
+    /// - Parameter workspaceId: when supplied, the link opens as a browser
+    ///   split beside the caller's pane — reusing an existing browser pane in
+    ///   that workspace if one is already open, so repeated clicks do not stack
+    ///   up splits. This mirrors how markdown and file previews open.
     @discardableResult
-    static func open(_ url: URL) -> Destination {
+    static func open(_ url: URL, inWorkspace workspaceId: UUID? = nil) -> Destination {
+        if let workspaceId,
+           AppDelegate.shared?.tabManager?.openBrowser(
+               inWorkspace: workspaceId,
+               url: url,
+               preferSplitRight: true
+           ) != nil {
+            return .cmuxBrowser
+        }
+        // No workspace context, or the split could not be made: fall back to a
+        // browser tab, then to the system browser, so the click never no-ops.
         if AppDelegate.shared?.openBrowserAndFocusAddressBar(url: url) != nil {
             return .cmuxBrowser
         }
