@@ -33,6 +33,22 @@ struct FilePreviewCSVColumnLayout: Equatable {
 
     var totalWidth: CGFloat { widths.reduce(0, +) }
 
+    /// Display slot a source column currently occupies, or nil if unknown.
+    func displayIndex(ofColumn column: Int) -> Int? {
+        order.firstIndex(of: column)
+    }
+
+    /// Move a source column one slot left (-1) or right (+1). Returns false at
+    /// the ends so a caller can leave the keystroke unhandled.
+    @discardableResult
+    mutating func shift(column: Int, by offset: Int) -> Bool {
+        guard let from = displayIndex(ofColumn: column) else { return false }
+        let destination = from + offset
+        guard destination >= 0, destination < order.count else { return false }
+        move(fromDisplayIndex: from, toDisplayIndex: destination)
+        return true
+    }
+
     func width(ofColumn column: Int) -> CGFloat {
         widths.indices.contains(column) ? widths[column] : Self.minimumWidth
     }

@@ -349,3 +349,65 @@ import Testing
         #expect(stack.count == Stack.limit)
     }
 }
+
+@Suite struct FilePreviewCSVColumnShiftTests {
+    private func layout(_ widths: [CGFloat]) -> FilePreviewCSVColumnLayout {
+        FilePreviewCSVColumnLayout(widths: widths)
+    }
+
+    @Test func shiftsRightAndLeft() {
+        var subject = layout([100, 200, 300])
+        let right = subject.shift(column: 0, by: 1)
+        #expect(right)
+        #expect(subject.order == [1, 0, 2])
+        let left = subject.shift(column: 0, by: -1)
+        #expect(left)
+        #expect(subject.order == [0, 1, 2])
+    }
+
+    @Test func refusesToShiftPastEitherEnd() {
+        var subject = layout([100, 100, 100])
+        let offLeft = subject.shift(column: 0, by: -1)
+        #expect(!offLeft)
+        #expect(subject.order == [0, 1, 2])
+        let offRight = subject.shift(column: 2, by: 1)
+        #expect(!offRight)
+        #expect(subject.order == [0, 1, 2])
+    }
+
+    @Test func shiftTracksTheColumnNotTheSlot() {
+        var subject = layout([100, 200, 300])
+        // Move column 2 to the front, then keep nudging that same column.
+        let first = subject.shift(column: 2, by: -1)
+        #expect(first)
+        #expect(subject.order == [0, 2, 1])
+        let second = subject.shift(column: 2, by: -1)
+        #expect(second)
+        #expect(subject.order == [2, 0, 1])
+        let third = subject.shift(column: 2, by: -1)
+        #expect(!third)
+    }
+
+    @Test func shiftCarriesTheColumnWidth() {
+        var subject = layout([100, 200, 300])
+        subject.resize(column: 0, to: 150)
+        let moved = subject.shift(column: 0, by: 2)
+        #expect(moved)
+        #expect(subject.orderedWidths == [200, 300, 150])
+    }
+
+    @Test func shiftIgnoresUnknownColumns() {
+        var subject = layout([100, 100])
+        let moved = subject.shift(column: 9, by: 1)
+        #expect(!moved)
+        #expect(subject.order == [0, 1])
+    }
+
+    @Test func displayIndexFollowsReordering() {
+        var subject = layout([100, 100, 100])
+        #expect(subject.displayIndex(ofColumn: 2) == 2)
+        subject.move(fromDisplayIndex: 2, toDisplayIndex: 0)
+        #expect(subject.displayIndex(ofColumn: 2) == 0)
+        #expect(subject.displayIndex(ofColumn: 99) == nil)
+    }
+}

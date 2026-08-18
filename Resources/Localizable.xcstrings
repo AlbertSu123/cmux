@@ -105030,13 +105030,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Drag to reorder \u00b7 drag the edge to resize"
+            "value": "Click to select, then \u2318\u2190 / \u2318\u2192 to move \u00b7 drag to reorder \u00b7 drag the edge to resize"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ドラッグで並べ替え・端をドラッグで幅を変更"
+            "value": "クリックで選択し⌘←/⌘→で移動・ドラッグで並べ替え・端をドラッグで幅を変更"
           }
         }
       }

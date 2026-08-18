@@ -4745,6 +4745,7 @@ private struct FilePreviewCSVView: View {
     @State private var resize: ColumnResize?
     @State private var columnDrag: ColumnDrag?
     @State private var selectedRowID: Int?
+    @State private var selectedColumn: Int?
     @State private var editingCell: EditingCell?
     @State private var editText: String = ""
     @State private var saveError: String?
@@ -4787,6 +4788,7 @@ private struct FilePreviewCSVView: View {
             resize = nil
             columnDrag = nil
             selectedRowID = nil
+            selectedColumn = nil
             editingCell = nil
             saveError = nil
             undoStack.removeAll()
@@ -4875,6 +4877,8 @@ private struct FilePreviewCSVView: View {
             deleteSelectedRow()
             return .handled
         }
+        .onKeyPress(.leftArrow) { moveSelectedColumn(by: -1) }
+        .onKeyPress(.rightArrow) { moveSelectedColumn(by: 1) }
         .onKeyPress(KeyEquivalent("z")) {
             let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
             guard flags.contains(.command), editingCell == nil else { return .ignored }
@@ -4914,13 +4918,19 @@ private struct FilePreviewCSVView: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 6)
             .frame(width: layout.width(ofColumn: column), alignment: .leading)
-            .background(isDragging ? Color(nsColor: foregroundColor).opacity(0.12) : Color.clear)
+            .background(
+                isDragging || selectedColumn == column
+                    ? Color.accentColor.opacity(isDragging ? 0.22 : 0.16)
+                    : Color.clear
+            )
             .offset(x: isDragging ? (columnDrag?.translation ?? 0) : 0)
             .zIndex(isDragging ? 1 : 0)
             .help(String(
                 localized: "filePreview.csv.columnHint",
-                defaultValue: "Drag to reorder · drag the edge to resize"
+                defaultValue: "Click to select, then ⌘← / ⌘→ to move · drag to reorder · drag the edge to resize"
             ))
+            .contentShape(Rectangle())
+            .onTapGesture { selectedColumn = column }
             .gesture(reorderGesture(displayIndex: displayIndex))
             .overlay(alignment: .trailing) {
                 resizeHandle(column: column)
@@ -5038,6 +5048,17 @@ private struct FilePreviewCSVView: View {
         }
         editingCell = nil
         persist(doc)
+    }
+
+    /// Nudge the selected column one slot. Requires command so the arrow keys
+    /// stay available for anything else in the panel, and is ignored while a
+    /// cell editor is open so it cannot fight the text field's caret movement.
+    private func moveSelectedColumn(by offset: Int) -> KeyPress.Result {
+        let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+        guard flags.contains(.command), editingCell == nil, let column = selectedColumn else {
+            return .ignored
+        }
+        return layout.shift(column: column, by: offset) ? .handled : .ignored
     }
 
     private func undoLastEdit() {
