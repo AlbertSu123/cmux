@@ -4746,6 +4746,7 @@ private struct FilePreviewCSVView: View {
     @State private var columnDrag: ColumnDrag?
     @State private var selectedRowID: Int?
     @State private var selectedColumn: Int?
+    @State private var checkedRowIDs: Set<Int> = []
     @State private var editingCell: EditingCell?
     @State private var editText: String = ""
     @State private var saveError: String?
@@ -4790,6 +4791,7 @@ private struct FilePreviewCSVView: View {
             columnDrag = nil
             selectedRowID = nil
             selectedColumn = nil
+            checkedRowIDs = []
             editingCell = nil
             saveError = nil
             undoStack.removeAll()
@@ -4813,7 +4815,7 @@ private struct FilePreviewCSVView: View {
     }
 
     private func grid(for document: CSVPreviewDocument) -> some View {
-        let totalWidth = layout.totalWidth
+        let totalWidth = layout.totalWidth + Self.selectGutterWidth
         let gridLine = Color(nsColor: foregroundColor).opacity(0.08)
         return VStack(spacing: 0) {
             ScrollView([.horizontal, .vertical], showsIndicators: true) {
@@ -4842,6 +4844,33 @@ private struct FilePreviewCSVView: View {
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
+            if !checkedRowIDs.isEmpty {
+                HStack(spacing: 8) {
+                    Text(String(
+                        localized: "filePreview.csv.selectedCount",
+                        defaultValue: "\(checkedRowIDs.count) selected"
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Button(String(
+                        localized: "filePreview.csv.deleteSelected",
+                        defaultValue: "Delete Selected"
+                    )) {
+                        deleteCheckedOrSelectedRows()
+                    }
+                    .controlSize(.small)
+                    Button(String(
+                        localized: "filePreview.csv.clearSelection",
+                        defaultValue: "Clear"
+                    )) {
+                        checkedRowIDs = []
+                    }
+                    .controlSize(.small)
+                }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
                 .background(.bar)
@@ -4875,21 +4904,43 @@ private struct FilePreviewCSVView: View {
         // the key bindings below ever fire: .focusable() only makes a view
         // eligible for focus on macOS, it does not take focus on click.
         .onTapGesture { gridFocused = true }
-        // Modifiers come from SwiftUI's KeyPress, not NSApp.currentEvent:
-        // during key handling currentEvent is not reliably the key event, which
-        // is why Backport.onKeyPress threads keyPress.modifiers through too.
-        .onKeyPress(keys: [.delete, .deleteForward], phases: [.down, .repeat]) { keyPress in
-            deleteRowKeyPress(modifiers: keyPress.modifiers)
+        // One catch-all handler rather than per-key onKeyPress(keys:) bindings.
+        // Matching a KeyEquivalent for the delete key never fired here while
+        // the arrow bindings did, so the key is compared directly and anything
+        // unrecognised is returned as .ignored so typing still passes through.
+        .onKeyPress(phases: [.down, .repeat]) { keyPress in
+            handleKeyPress(keyPress)
         }
-        .onKeyPress(keys: [.leftArrow], phases: [.down, .repeat]) { keyPress in
-            moveSelectedColumn(by: -1, modifiers: keyPress.modifiers)
+    }
+
+    private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        guard editingCell == nil else { return .ignored }
+        let modifiers = keyPress.modifiers
+        let character = keyPress.characters.first
+
+        // Delete: the key reports as .delete, .deleteForward, U+007F or U+0008
+        // depending on keyboard and phase, so accept all of them.
+        let isDeleteKey = keyPress.key == .delete
+            || keyPress.key == .deleteForward
+            || character == "\u{7F}"
+            || character == "\u{08}"
+        if isDeleteKey {
+            guard modifiers.contains(.command) || modifiers.contains(.control) else {
+                return .ignored
+            }
+            return deleteCheckedOrSelectedRows()
         }
-        .onKeyPress(keys: [.rightArrow], phases: [.down, .repeat]) { keyPress in
-            moveSelectedColumn(by: 1, modifiers: keyPress.modifiers)
+
+        if keyPress.key == .leftArrow, modifiers.contains(.command) {
+            return moveSelectedColumn(by: -1)
         }
-        .onKeyPress(keys: [KeyEquivalent("z")], phases: [.down]) { keyPress in
-            guard keyPress.modifiers.contains(.command), editingCell == nil else { return .ignored }
-            if keyPress.modifiers.contains(.shift) {
+        if keyPress.key == .rightArrow, modifiers.contains(.command) {
+            return moveSelectedColumn(by: 1)
+        }
+
+        if character == "z" || character == "Z" {
+            guard modifiers.contains(.command) else { return .ignored }
+            if modifiers.contains(.shift) {
                 guard redoStack.canUndo else { return .ignored }
                 redoLastEdit()
             } else {
@@ -4898,10 +4949,29 @@ private struct FilePreviewCSVView: View {
             }
             return .handled
         }
+        return .ignored
     }
 
     private func headerRow(for document: CSVPreviewDocument, gridLine: Color) -> some View {
         HStack(spacing: 0) {
+            Image(systemName: allRowsChecked(document) ? "checkmark.square.fill" : "square")
+                .font(.system(size: 11))
+                .foregroundStyle(allRowsChecked(document) ? Color.accentColor : .secondary)
+                .frame(width: Self.selectGutterWidth)
+                .contentShape(Rectangle())
+                .help(String(
+                    localized: "filePreview.csv.selectAll",
+                    defaultValue: "Select all rows"
+                ))
+                .onTapGesture {
+                    guard document.isEditable else { return }
+                    if allRowsChecked(document) {
+                        checkedRowIDs = []
+                    } else {
+                        checkedRowIDs = Set(document.rows.map(\.id))
+                    }
+                    gridFocused = true
+                }
             ForEach(Array(layout.order.enumerated()), id: \.element) { displayIndex, column in
                 headerCell(
                     title: column < document.header.count ? document.header[column] : "",
@@ -4914,6 +4984,10 @@ private struct FilePreviewCSVView: View {
         .overlay(alignment: .bottom) {
             gridLine.frame(height: 1)
         }
+    }
+
+    private func allRowsChecked(_ document: CSVPreviewDocument) -> Bool {
+        !document.rows.isEmpty && checkedRowIDs.count == document.rows.count
     }
 
     private func headerCell(title: String, column: Int, displayIndex: Int) -> some View {
@@ -4985,8 +5059,30 @@ private struct FilePreviewCSVView: View {
         )
     }
 
+    /// Width of the leading select gutter, matched by the header's spacer.
+    private static let selectGutterWidth: CGFloat = 26
+
+    private func selectBox(rowID: Int, isEditable: Bool) -> some View {
+        Image(systemName: checkedRowIDs.contains(rowID) ? "checkmark.square.fill" : "square")
+            .font(.system(size: 11))
+            .foregroundStyle(checkedRowIDs.contains(rowID) ? Color.accentColor : .secondary)
+            .frame(width: Self.selectGutterWidth)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard isEditable else { return }
+                if checkedRowIDs.contains(rowID) {
+                    checkedRowIDs.remove(rowID)
+                } else {
+                    checkedRowIDs.insert(rowID)
+                }
+                selectedRowID = rowID
+                gridFocused = true
+            }
+    }
+
     private func cellRow(_ row: CSVPreviewDocument.Row, document: CSVPreviewDocument) -> some View {
         HStack(spacing: 0) {
+            selectBox(rowID: row.id, isEditable: document.isEditable)
             ForEach(Array(layout.order.enumerated()), id: \.element) { _, column in
                 if editingCell == EditingCell(rowID: row.id, column: column) {
                     cellEditor(rowID: row.id, column: column)
@@ -5069,22 +5165,45 @@ private struct FilePreviewCSVView: View {
 
     /// Delete the selected row on command-delete or control-delete. Both are
     /// accepted because either reads as "remove this" depending on habit.
-    private func deleteRowKeyPress(modifiers: EventModifiers) -> KeyPress.Result {
-        guard modifiers.contains(.command) || modifiers.contains(.control),
-              editingCell == nil,
-              selectedRowID != nil
-        else { return .ignored }
-        deleteSelectedRow()
+    /// Delete every checked row, or the clicked row when nothing is checked.
+    @discardableResult
+    private func deleteCheckedOrSelectedRows() -> KeyPress.Result {
+        guard let doc = document, doc.isEditable else { return .ignored }
+        let targets = checkedRowIDs.isEmpty
+            ? [selectedRowID].compactMap { $0 }
+            : doc.rows.map(\.id).filter { checkedRowIDs.contains($0) }
+        guard !targets.isEmpty else { return .ignored }
+        deleteRows(ids: targets)
         return .handled
+    }
+
+    /// Remove rows bottom-up so each recorded index stays valid, which lets
+    /// cmd-z walk them back one at a time in the order they were removed.
+    private func deleteRows(ids: [Int]) {
+        guard var doc = document, doc.isEditable, !ids.isEmpty else { return }
+        let ordered = ids.compactMap { id in
+            doc.rows.firstIndex(where: { $0.id == id }).map { (index: $0, id: id) }
+        }.sorted { $0.index > $1.index }
+        guard !ordered.isEmpty else { return }
+        for entry in ordered {
+            guard let index = doc.rows.firstIndex(where: { $0.id == entry.id }) else { continue }
+            undoStack.record(.insertRow(index: index, row: doc.rows[index]))
+            doc.deleteRow(id: entry.id)
+        }
+        redoStack.removeAll()
+        checkedRowIDs.subtract(ids)
+        if let selected = selectedRowID, ids.contains(selected) {
+            selectedRowID = nil
+        }
+        editingCell = nil
+        persist(doc)
     }
 
     /// Nudge the selected column one slot. Requires command so the arrow keys
     /// stay available for anything else in the panel, and is ignored while a
     /// cell editor is open so it cannot fight the text field's caret movement.
-    private func moveSelectedColumn(by offset: Int, modifiers: EventModifiers) -> KeyPress.Result {
-        guard modifiers.contains(.command), editingCell == nil, let column = selectedColumn else {
-            return .ignored
-        }
+    private func moveSelectedColumn(by offset: Int) -> KeyPress.Result {
+        guard let column = selectedColumn else { return .ignored }
         return layout.shift(column: column, by: offset) ? .handled : .ignored
     }
 
@@ -5239,8 +5358,11 @@ private struct FilePreviewCSVView: View {
                             localized: "filePreview.csv.deleteRow",
                             defaultValue: "Delete Row"
                         ), role: .destructive) {
-                            selectedRowID = rowID
-                            deleteSelectedRow()
+                            if checkedRowIDs.contains(rowID) {
+                                deleteRows(ids: Array(checkedRowIDs))
+                            } else {
+                                deleteRows(ids: [rowID])
+                            }
                         }
                     }
                 }
