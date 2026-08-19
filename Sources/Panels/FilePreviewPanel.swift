@@ -4701,6 +4701,33 @@ private struct CSVPreviewDocument {
     }
 }
 
+/// Hands back the `NSScrollView` backing the SwiftUI `ScrollView` it is placed in.
+///
+/// SwiftUI cannot scroll a single axis before macOS 15, and `scrollTo` moves
+/// both: aiming it at a header cell would drag a long sheet back to the top,
+/// because a pinned header's *layout* position is the top of the content no
+/// matter where it is drawn. Reaching the scroll view keeps the reveal
+/// horizontal and leaves the row the user is looking at where it is.
+private struct ScrollViewBridge: NSViewRepresentable {
+    let onResolve: (NSScrollView?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let probe = NSView(frame: .zero)
+        DispatchQueue.main.async { onResolve(probe.enclosingScrollView) }
+        return probe
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {}
+}
+
+/// Holds the resolved scroll view without republishing the grid: the reference
+/// is plumbing for scrolling, and nothing renders from it.
+private final class ScrollViewHandle {
+    weak var scrollView: NSScrollView?
+}
+
 /// Paints a find hit. Every match is tinted and the current one is outlined, so
 /// stepping through results stays legible without moving the row selection.
 private struct CSVMatchHighlight: ViewModifier {
@@ -4987,6 +5014,7 @@ private struct FilePreviewCSVView: View {
     @State private var hasUnsavedEdits = false
     @State private var saveTask: Task<Void, Never>?
     @State private var search = FilePreviewCSVSearch()
+    @State private var scrollHandle = ScrollViewHandle()
     @State private var isFindPresented = false
     @FocusState private var findFieldFocused: Bool
     @Environment(\.controlActiveState) private var controlActiveState
@@ -5081,6 +5109,10 @@ private struct FilePreviewCSVView: View {
                     }
                     .frame(width: max(totalWidth, 1), alignment: .leading)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(
+                        ScrollViewBridge { scrollHandle.scrollView = $0 }
+                            .frame(width: 0, height: 0)
+                    )
                 }
                 .overlay(alignment: .topTrailing) {
                     if isFindPresented {
@@ -5092,6 +5124,7 @@ private struct FilePreviewCSVView: View {
                 .onChange(of: search.currentIndex) { _, _ in
                     guard let match = search.currentMatch else { return }
                     proxy.scrollTo(match.rowID, anchor: .center)
+                    revealColumn(match.column, in: layout)
                 }
             }
             if document.truncated {
@@ -5613,7 +5646,42 @@ private struct FilePreviewCSVView: View {
     /// cell editor is open so it cannot fight the text field's caret movement.
     private func moveSelectedColumn(by offset: Int) -> KeyPress.Result {
         guard let column = selectedColumn else { return .ignored }
-        return layout.shift(column: column, by: offset) ? .handled : .ignored
+        // Shift a copy and reveal from that copy rather than re-reading state
+        // that was just written: the reveal needs the post-move order, and
+        // reading it back through the property wrapper is not guaranteed to
+        // hand back the new value in the same closure.
+        var moved = layout
+        guard moved.shift(column: column, by: offset) else { return .ignored }
+        layout = moved
+        revealColumn(column, in: moved)
+        return .handled
+    }
+
+    /// Scrolls horizontally by the least amount that brings a column fully into
+    /// view, leaving the vertical position untouched. A column already on
+    /// screen does not move the sheet at all.
+    private func revealColumn(_ column: Int, in layout: FilePreviewCSVColumnLayout) {
+        guard let scrollView = scrollHandle.scrollView,
+              let displayIndex = layout.displayIndex(ofColumn: column) else { return }
+        let leading = Self.selectGutterWidth + layout.offset(ofDisplayIndex: displayIndex)
+        let trailing = leading + layout.width(ofColumn: column)
+        let clipView = scrollView.contentView
+        let visible = clipView.bounds
+        let maximumX = max(0, scrollView.documentView.map { $0.frame.width - visible.width } ?? 0)
+
+        let targetX: CGFloat
+        if leading < visible.minX {
+            targetX = leading
+        } else if trailing > visible.maxX {
+            targetX = trailing - visible.width
+        } else {
+            return
+        }
+
+        let clampedX = min(max(0, targetX), maximumX)
+        guard abs(clampedX - visible.minX) > 0.5 else { return }
+        clipView.scroll(to: NSPoint(x: clampedX, y: visible.minY))
+        scrollView.reflectScrolledClipView(clipView)
     }
 
     private func undoLastEdit() {
