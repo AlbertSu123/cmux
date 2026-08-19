@@ -4670,6 +4670,49 @@ private struct CSVPreviewDocument {
     }
 }
 
+/// Pushes `cursor` for as long as `isActive`, popping exactly once per push.
+///
+/// The cursor stack is process-wide, so an unbalanced `NSCursor.pop()` corrupts
+/// it for the whole app. That is easy to trigger in the CSV grid, where a lazy
+/// row can be scrolled out from under the pointer before its hover ever ends,
+/// which is why the pop is also driven off `onDisappear`.
+private struct CursorPush: ViewModifier {
+    let cursor: NSCursor
+    let isActive: Bool
+
+    @State private var didPush = false
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { apply(isActive) }
+            .onChange(of: isActive) { _, active in apply(active) }
+            .onDisappear { apply(false) }
+    }
+
+    private func apply(_ shouldPush: Bool) {
+        guard shouldPush != didPush else { return }
+        didPush = shouldPush
+        if shouldPush {
+            cursor.push()
+        } else {
+            NSCursor.pop()
+        }
+    }
+}
+
+/// `CursorPush` for the common case where hover alone decides.
+private struct HoverCursor: ViewModifier {
+    let cursor: NSCursor
+
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isHovering = $0 }
+            .modifier(CursorPush(cursor: cursor, isActive: isHovering))
+    }
+}
+
 /// Grab strip on a header cell's trailing edge.
 ///
 /// The drag is previewed with a guide line and only committed on release. The
@@ -4679,16 +4722,14 @@ private struct CSVPreviewDocument {
 /// as the grid flickering. Deferring the commit means the grid lays out twice
 /// per resize instead of once per event, so there is nothing left to flicker.
 ///
-/// Owns its own hover state so the resize cursor is popped exactly as many
-/// times as it was pushed — an unbalanced `NSCursor.pop()` corrupts the shared
-/// cursor stack for the whole app, which is easy to trigger by scrolling the
-/// grid out from under a hovered handle.
+/// The resize cursor is held for the whole drag, not just while hovering: the
+/// pointer leaves the grip the moment the drag starts, since the grip no longer
+/// follows it.
 private struct ColumnResizeHandle: View {
     let width: () -> CGFloat
     let onBegin: () -> Void
     let onCommit: (CGFloat) -> Void
 
-    @State private var didPushCursor = false
     @State private var isHovering = false
     /// Screen x the drag started at, and the width the column had then. See the
     /// gesture below for why the anchor is kept in screen space.
@@ -4717,11 +4758,8 @@ private struct ColumnResizeHandle: View {
             .frame(width: Self.hitWidth)
             .contentShape(Rectangle())
             .overlay(alignment: .top) { guide }
-            .onHover { inside in
-                isHovering = inside
-                syncCursor(dragging: isDragging)
-            }
-            .onDisappear { pushCursor(false) }
+            .onHover { isHovering = $0 }
+            .modifier(CursorPush(cursor: .resizeLeftRight, isActive: isHovering || isDragging))
             // High priority so grabbing the grip resizes instead of starting the
             // parent header cell's reorder drag.
             //
@@ -4742,7 +4780,6 @@ private struct ColumnResizeHandle: View {
                             dragAnchorX = mouseX
                             dragBaseWidth = width()
                             proposedWidth = width()
-                            syncCursor(dragging: true)
                             onBegin()
                             return
                         }
@@ -4755,7 +4792,6 @@ private struct ColumnResizeHandle: View {
                         dragAnchorX = nil
                         dragBaseWidth = nil
                         proposedWidth = nil
-                        syncCursor(dragging: false)
                         onCommit(committed)
                     }
             )
@@ -4772,24 +4808,6 @@ private struct ColumnResizeHandle: View {
                 .frame(width: Self.lineWidth, height: Self.guideHeight)
                 .offset(x: proposedWidth - dragBaseWidth)
                 .allowsHitTesting(false)
-        }
-    }
-
-    /// `dragging` is passed rather than read back from state: the callers set
-    /// it in the same closure, and a stale read on the end path would strand a
-    /// pushed cursor.
-    private func syncCursor(dragging: Bool) {
-        pushCursor(isHovering || dragging)
-    }
-
-    /// Push and pop in matched pairs, since the cursor stack is process-wide.
-    private func pushCursor(_ shouldPush: Bool) {
-        guard shouldPush != didPushCursor else { return }
-        didPushCursor = shouldPush
-        if shouldPush {
-            NSCursor.resizeLeftRight.push()
-        } else {
-            NSCursor.pop()
         }
     }
 
@@ -5405,6 +5423,7 @@ private struct FilePreviewCSVView: View {
                 .padding(.vertical, 4)
                 .frame(width: width, alignment: .leading)
                 .contentShape(Rectangle())
+                .modifier(HoverCursor(cursor: .pointingHand))
                 .onTapGesture(count: 2) {
                     guard isEditable else { return }
                     beginEdit(rowID: rowID, column: column, current: text)
