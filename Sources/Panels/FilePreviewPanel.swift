@@ -4701,6 +4701,136 @@ private struct CSVPreviewDocument {
     }
 }
 
+/// Sort keys for the CSV grid, highest priority first.
+///
+/// A newly sorted column is appended as the next tiebreaker rather than
+/// becoming the primary key. Sorting by region and then by company groups the
+/// sheet by region and orders company inside each region, which is what sorting
+/// "within what I already sorted" means; the opposite convention, where the
+/// latest click wins, would throw the region grouping away.
+struct FilePreviewCSVSort: Equatable, Hashable {
+    enum Direction: Equatable, Hashable {
+        case ascending
+        case descending
+
+        var reversed: Direction { self == .ascending ? .descending : .ascending }
+    }
+
+    struct Key: Equatable, Hashable {
+        let column: Int
+        var direction: Direction
+    }
+
+    private(set) var keys: [Key] = []
+
+    var isEmpty: Bool { keys.isEmpty }
+
+    /// 1-based position in the chain, shown in the header so the precedence of
+    /// several active sorts is readable.
+    func rank(ofColumn column: Int) -> Int? {
+        keys.firstIndex(where: { $0.column == column }).map { $0 + 1 }
+    }
+
+    func direction(ofColumn column: Int) -> Direction? {
+        keys.first(where: { $0.column == column })?.direction
+    }
+
+    /// Ascending, then descending, then out of the chain. Toggling keeps the
+    /// column's existing precedence: reversing a tiebreaker must not promote it
+    /// over the keys it breaks ties for.
+    mutating func cycle(column: Int) {
+        guard let index = keys.firstIndex(where: { $0.column == column }) else {
+            keys.append(Key(column: column, direction: .ascending))
+            return
+        }
+        if keys[index].direction == .ascending {
+            keys[index].direction = .descending
+        } else {
+            keys.remove(at: index)
+        }
+    }
+
+    mutating func set(column: Int, to direction: Direction) {
+        if let index = keys.firstIndex(where: { $0.column == column }) {
+            keys[index].direction = direction
+        } else {
+            keys.append(Key(column: column, direction: direction))
+        }
+    }
+
+    mutating func remove(column: Int) {
+        keys.removeAll { $0.column == column }
+    }
+
+    mutating func clear() {
+        keys.removeAll()
+    }
+}
+
+/// Display ordering for the CSV grid.
+enum FilePreviewCSVRowOrder {
+    /// One cell's place in a sort. Numbers order numerically and ahead of text,
+    /// so a numeric column sorts 2 before 10 rather than "10" before "2".
+    enum Value: Comparable {
+        case empty
+        case number(Double)
+        case text(String)
+
+        static func < (lhs: Value, rhs: Value) -> Bool {
+            switch (lhs, rhs) {
+            case (.empty, .empty): return false
+            case (.empty, _): return true
+            case (_, .empty): return false
+            case let (.number(a), .number(b)): return a < b
+            case (.number, .text): return true
+            case (.text, .number): return false
+            case let (.text(a), .text(b)): return a < b
+            }
+        }
+
+        /// Text is folded once, at decoration time, so comparisons are plain
+        /// string comparisons. A locale-aware compare per comparison would run
+        /// hundreds of thousands of times on a large sheet.
+        static func of(_ text: String) -> Value {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return .empty }
+            if let number = Double(trimmed) { return .number(number) }
+            return .text(trimmed.folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: nil
+            ))
+        }
+    }
+
+    /// Row indices in display order.
+    ///
+    /// Decorate-sort-undecorate: the comparison values are built once per
+    /// sorted column rather than per comparison. Ties fall back to the original
+    /// index so the order is total and the sort is stable — rows the keys
+    /// cannot separate stay in file order instead of shuffling on every resort.
+    static func displayIndices(cells: [[String]], sort: FilePreviewCSVSort) -> [Int] {
+        let indices = Array(cells.indices)
+        guard !sort.keys.isEmpty else { return indices }
+
+        let decorated: [[Value]] = sort.keys.map { key in
+            cells.map { row in
+                key.column < row.count ? Value.of(row[key.column]) : .empty
+            }
+        }
+
+        return indices.sorted { lhs, rhs in
+            for (position, key) in sort.keys.enumerated() {
+                let left = decorated[position][lhs]
+                let right = decorated[position][rhs]
+                if left == right { continue }
+                let ascending = left < right
+                return key.direction == .ascending ? ascending : !ascending
+            }
+            return lhs < rhs
+        }
+    }
+}
+
 /// Hands back the `NSScrollView` backing the SwiftUI `ScrollView` it is placed in.
 ///
 /// SwiftUI cannot scroll a single axis before macOS 15, and `scrollTo` moves
@@ -5015,6 +5145,11 @@ private struct FilePreviewCSVView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var search = FilePreviewCSVSearch()
     @State private var scrollHandle = ScrollViewHandle()
+    @State private var sort = FilePreviewCSVSort()
+    /// Rows in the order they are shown. Sorting is a view over the document:
+    /// the document keeps file order, so clicking a header never rewrites the
+    /// user's file on the next autosave.
+    @State private var displayRows: [CSVPreviewDocument.Row] = []
     @State private var isFindPresented = false
     @FocusState private var findFieldFocused: Bool
     @Environment(\.controlActiveState) private var controlActiveState
@@ -5049,7 +5184,8 @@ private struct FilePreviewCSVView: View {
             guard let signal else { return }
             handleFindSignal(signal)
         }
-        .task(id: search.query) { await recomputeMatches(for: document) }
+        .onChange(of: sort) { _, _ in rebuildDisplayRows(from: document) }
+        .task(id: SearchScan(query: search.query, sort: sort)) { await recomputeMatches() }
         .task(id: panel.filePath) {
             let url = URL(fileURLWithPath: panel.filePath)
             let loaded = await Task.detached(priority: .userInitiated) {
@@ -5057,6 +5193,11 @@ private struct FilePreviewCSVView: View {
             }.value
             document = loaded
             loadFailed = loaded == nil
+            // A new file starts unsorted; carrying a previous file's sort keys
+            // over would order the new sheet by whatever columns happened to
+            // share an index.
+            sort.clear()
+            rebuildDisplayRows(from: loaded)
             layout = FilePreviewCSVColumnLayout(widths: loaded?.columnWidths ?? [])
             resizingColumn = nil
             columnDrag = nil
@@ -5094,7 +5235,7 @@ private struct FilePreviewCSVView: View {
                 ScrollView([.horizontal, .vertical], showsIndicators: true) {
                     LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                         Section(header: headerRow(for: document, gridLine: gridLine)) {
-                            ForEach(document.rows) { row in
+                            ForEach(displayRows) { row in
                                 cellRow(row, document: document)
                                     .background(
                                         row.id.isMultiple(of: 2)
@@ -5202,6 +5343,90 @@ private struct FilePreviewCSVView: View {
         .onKeyPress(phases: [.down, .repeat]) { keyPress in
             handleKeyPress(keyPress)
         }
+    }
+
+    /// Keyed on both the query and the sort: a resort changes match order, so
+    /// the scan has to rerun even when the query has not changed.
+    private struct SearchScan: Equatable, Hashable {
+        let query: String
+        let sort: FilePreviewCSVSort
+    }
+
+    /// Takes the document explicitly rather than reading `@State` that a caller
+    /// may have just written, which is not guaranteed to read back as the new
+    /// value inside the same closure.
+    private func rebuildDisplayRows(from document: CSVPreviewDocument?) {
+        guard let document else {
+            displayRows = []
+            return
+        }
+        guard !sort.isEmpty else {
+            displayRows = document.rows
+            return
+        }
+        let order = FilePreviewCSVRowOrder.displayIndices(
+            cells: document.rows.map(\.cells),
+            sort: sort
+        )
+        displayRows = order.map { document.rows[$0] }
+    }
+
+    private func sortMenu(for column: Int) -> some View {
+        Group {
+            Button(String(
+                localized: "filePreview.csv.sortAscending",
+                defaultValue: "Sort Ascending"
+            )) { applySort(column: column, direction: .ascending) }
+            Button(String(
+                localized: "filePreview.csv.sortDescending",
+                defaultValue: "Sort Descending"
+            )) { applySort(column: column, direction: .descending) }
+            if sort.rank(ofColumn: column) != nil {
+                Button(String(
+                    localized: "filePreview.csv.sortRemove",
+                    defaultValue: "Remove From Sort"
+                )) { sort.remove(column: column) }
+            }
+            if !sort.isEmpty {
+                Divider()
+                Button(String(
+                    localized: "filePreview.csv.sortClear",
+                    defaultValue: "Clear All Sorts"
+                )) { sort.clear() }
+            }
+        }
+    }
+
+    private func applySort(column: Int, direction: FilePreviewCSVSort.Direction) {
+        sort.set(column: column, to: direction)
+    }
+
+    /// The header's sort control: an arrow for the direction, and the column's
+    /// place in the chain once more than one column is sorted.
+    private func sortControl(for column: Int) -> some View {
+        let rank = sort.rank(ofColumn: column)
+        let direction = sort.direction(ofColumn: column)
+        return Button {
+            sort.cycle(column: column)
+        } label: {
+            HStack(spacing: 1) {
+                Image(systemName: direction == .descending ? "arrow.down" : "arrow.up")
+                    .font(.system(size: 9, weight: .semibold))
+                if let rank, sort.keys.count > 1 {
+                    Text("\(rank)")
+                        .font(.system(size: 8, weight: .semibold))
+                        .monospacedDigit()
+                }
+            }
+            .foregroundStyle(rank == nil ? Color.secondary.opacity(0.55) : Color.accentColor)
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(String(
+            localized: "filePreview.csv.sortHint",
+            defaultValue: "Sort ascending, descending, then off · sorting a second column breaks ties within the first"
+        ))
     }
 
     private var findBar: some View {
@@ -5312,14 +5537,16 @@ private struct FilePreviewCSVView: View {
     /// The scan runs off the main actor because it is linear in cells and the
     /// grid holds up to 50k rows; `.task(id:)` cancels the previous scan when
     /// the next keystroke lands, which also debounces fast typing.
-    private func recomputeMatches(for document: CSVPreviewDocument?) async {
+    private func recomputeMatches() async {
         let query = search.query
-        guard !query.isEmpty, let document else {
+        guard !query.isEmpty else {
             search.apply([])
             return
         }
-        let rowIDs = document.rows.map(\.id)
-        let cells = document.rows.map(\.cells)
+        // Scanned in display order so the arrows step down the sheet as the
+        // user sees it rather than down the file.
+        let rowIDs = displayRows.map(\.id)
+        let cells = displayRows.map(\.cells)
         let found = await Task.detached(priority: .userInitiated) {
             FilePreviewCSVSearch.matches(for: query, rowIDs: rowIDs, cells: cells)
         }.value
@@ -5406,10 +5633,14 @@ private struct FilePreviewCSVView: View {
 
     private func headerCell(title: String, column: Int, displayIndex: Int) -> some View {
         let isDragging = columnDrag?.displayIndex == displayIndex
-        return Text(title)
-            .font(.system(size: 12, weight: .semibold))
-            .lineLimit(1)
-            .truncationMode(.tail)
+        return HStack(spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            sortControl(for: column)
+        }
             .padding(.horizontal, 9)
             .padding(.vertical, 6)
             .frame(width: layout.width(ofColumn: column), alignment: .leading)
@@ -5422,13 +5653,14 @@ private struct FilePreviewCSVView: View {
             .zIndex(isDragging ? 1 : 0)
             .help(String(
                 localized: "filePreview.csv.columnHint",
-                defaultValue: "Click to select, then ⌘← / ⌘→ to move · drag to reorder · drag the edge to resize"
+                defaultValue: "Click to select, then ⌘← / ⌘→ to move · drag to reorder · drag the edge to resize · arrow to sort"
             ))
             .contentShape(Rectangle())
             .onTapGesture {
                 selectedColumn = column
                 gridFocused = true
             }
+            .contextMenu { sortMenu(for: column) }
             .gesture(reorderGesture(displayIndex: displayIndex))
             .overlay(alignment: .trailing) {
                 resizeHandle(column: column)
@@ -5494,14 +5726,17 @@ private struct FilePreviewCSVView: View {
     /// itself for pointer input.
     private func toggleCheck(rowID: Int, in document: CSVPreviewDocument) {
         let flags = NSApp.currentEvent?.modifierFlags ?? []
+        // Measured over the displayed order: with a sort active, the rows
+        // between two clicks are the ones on screen between them, not the ones
+        // between them in the file.
         if flags.contains(.shift),
            let anchor = checkAnchorRowID,
-           let anchorIndex = document.rows.firstIndex(where: { $0.id == anchor }),
-           let targetIndex = document.rows.firstIndex(where: { $0.id == rowID }) {
+           let anchorIndex = displayRows.firstIndex(where: { $0.id == anchor }),
+           let targetIndex = displayRows.firstIndex(where: { $0.id == rowID }) {
             let range = anchorIndex <= targetIndex
                 ? anchorIndex...targetIndex
                 : targetIndex...anchorIndex
-            checkedRowIDs.formUnion(document.rows[range].map(\.id))
+            checkedRowIDs.formUnion(displayRows[range].map(\.id))
         } else {
             if checkedRowIDs.contains(rowID) {
                 checkedRowIDs.remove(rowID)
@@ -5718,6 +5953,7 @@ private struct FilePreviewCSVView: View {
     /// quiet — see `flushSave` for the paths that force one.
     private func persist(_ updated: CSVPreviewDocument) {
         document = updated
+        rebuildDisplayRows(from: updated)
         hasUnsavedEdits = true
         scheduleSave()
     }

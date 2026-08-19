@@ -99,6 +99,9 @@ plutil -replace CFBundleURLTypes.0.CFBundleURLName -string "${INSTALL_BUNDLE_ID}
 plutil -replace CFBundleURLTypes.1.CFBundleURLName -string "${INSTALL_BUNDLE_ID}.auth" "$PLIST"
 plutil -replace CFBundleURLTypes.1.CFBundleURLSchemes.0 -string "cmux-dev" "$PLIST"
 plutil -replace CMUXSidebarExtensionPointIdentifier -string "${INSTALL_BUNDLE_ID}.cmux.sidebar" "$PLIST"
+# Stamp the source commit so tooling can tell what the installed app contains;
+# the version string alone does not move between builds.
+plutil -replace CMUXInstalledCommit -string "$(git rev-parse HEAD)" "$PLIST"
 plutil -remove LSEnvironment "$PLIST" 2>/dev/null || true
 plutil -remove SUFeedURL "$PLIST" 2>/dev/null || true
 plutil -replace SUEnableAutomaticChecks -bool false "$PLIST"
