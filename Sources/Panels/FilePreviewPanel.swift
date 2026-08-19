@@ -999,6 +999,15 @@ final class FilePreviewPanel: Panel, ObservableObject, FilePreviewTextEditingPan
     @Published private(set) var isSaving = false
     @Published private(set) var focusFlashToken = 0
     @Published private(set) var previewMode: FilePreviewMode
+    /// ⌘F arrives through the app's shortcut router rather than the grid's own
+    /// key handling, so the request lands here and the grid acts on it. The
+    /// query and the match list stay in the grid — only the intent crosses.
+    @Published private(set) var csvFindSignal: FilePreviewCSVFindSignal?
+    /// Set by the grid so the router can answer honestly whether ⌘G had a find
+    /// bar to step. Deliberately not `@Published`: nothing renders from it, and
+    /// publishing it would re-render the grid on open and close.
+    var csvFindIsPresented = false
+    private var csvFindToken = 0
 
     let nativeViewSessions = FilePreviewNativeViewSessions()
 
@@ -1038,6 +1047,28 @@ final class FilePreviewPanel: Panel, ObservableObject, FilePreviewTextEditingPan
 
         prepareContentForPreviewMode()
         resolvePreviewModeIfNeeded(for: fileURL)
+    }
+
+    /// Opens the grid's find bar, or re-focuses it when it is already up.
+    @discardableResult
+    func requestCSVFind() -> Bool {
+        guard previewMode == .csv else { return false }
+        signalCSVFind(.open)
+        return true
+    }
+
+    /// Steps to the next or previous match. Returns false when there is no find
+    /// bar to step, so ⌘G falls through to whatever else wants it.
+    @discardableResult
+    func requestCSVFindStep(_ intent: FilePreviewCSVFindIntent) -> Bool {
+        guard previewMode == .csv, csvFindIsPresented else { return false }
+        signalCSVFind(intent)
+        return true
+    }
+
+    private func signalCSVFind(_ intent: FilePreviewCSVFindIntent) {
+        csvFindToken += 1
+        csvFindSignal = FilePreviewCSVFindSignal(intent: intent, token: csvFindToken)
     }
 
     func focus() {
@@ -4670,6 +4701,109 @@ private struct CSVPreviewDocument {
     }
 }
 
+/// Paints a find hit. Every match is tinted and the current one is outlined, so
+/// stepping through results stays legible without moving the row selection.
+private struct CSVMatchHighlight: ViewModifier {
+    let isMatch: Bool
+    let isCurrent: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background(isMatch ? Color.yellow.opacity(isCurrent ? 0.45 : 0.25) : Color.clear)
+            .overlay {
+                if isCurrent {
+                    Rectangle().strokeBorder(Color.accentColor, lineWidth: 2)
+                }
+            }
+    }
+}
+
+/// Find-in-sheet state for the CSV grid.
+///
+/// A value type for the same reason the column layout is: rows render inside a
+/// `LazyVStack`, and the snapshot-boundary rule forbids anything below that
+/// boundary from holding a reference to an observable store.
+struct FilePreviewCSVSearch: Equatable {
+    struct Match: Hashable {
+        let rowID: Int
+        let column: Int
+    }
+
+    var query: String = ""
+    /// Matches in document order, which is the order the arrows step through.
+    private(set) var matches: [Match] = []
+    /// The same matches keyed for lookup. Every visible cell asks whether it is
+    /// a match on each render, so that question has to be O(1); paying for the
+    /// second copy is cheaper than scanning the list per cell.
+    private(set) var matchSet: Set<Match> = []
+    private(set) var currentIndex: Int?
+
+    var currentMatch: Match? {
+        guard let currentIndex, matches.indices.contains(currentIndex) else { return nil }
+        return matches[currentIndex]
+    }
+
+    mutating func apply(_ found: [Match]) {
+        matches = found
+        matchSet = Set(found)
+        currentIndex = found.isEmpty ? nil : 0
+    }
+
+    mutating func clear() {
+        query = ""
+        apply([])
+    }
+
+    /// Step the selection, wrapping at both ends the way a find bar does.
+    mutating func step(by offset: Int) {
+        guard !matches.isEmpty else {
+            currentIndex = nil
+            return
+        }
+        let from = currentIndex ?? 0
+        let count = matches.count
+        currentIndex = ((from + offset) % count + count) % count
+    }
+
+    func isMatch(rowID: Int, column: Int) -> Bool {
+        matchSet.contains(Match(rowID: rowID, column: column))
+    }
+
+    func isCurrent(rowID: Int, column: Int) -> Bool {
+        currentMatch == Match(rowID: rowID, column: column)
+    }
+
+    /// Case- and diacritic-insensitive substring scan, in document order.
+    ///
+    /// Takes plain arrays rather than the document so it can run off the main
+    /// actor without the document type having to be `Sendable`.
+    static func matches(for query: String, rowIDs: [Int], cells: [[String]]) -> [Match] {
+        guard !query.isEmpty else { return [] }
+        var found: [Match] = []
+        for (index, row) in cells.enumerated() where rowIDs.indices.contains(index) {
+            let rowID = rowIDs[index]
+            for (column, text) in row.enumerated() where text.localizedStandardContains(query) {
+                found.append(Match(rowID: rowID, column: column))
+            }
+        }
+        return found
+    }
+}
+
+/// What the app's find shortcuts are asking the CSV grid to do.
+enum FilePreviewCSVFindIntent: Equatable {
+    case open
+    case next
+    case previous
+}
+
+/// One find request. The token distinguishes repeats, since pressing ⌘F twice
+/// carries the same intent and must still re-focus the field.
+struct FilePreviewCSVFindSignal: Equatable {
+    let intent: FilePreviewCSVFindIntent
+    let token: Int
+}
+
 /// Pushes `cursor` for as long as `isActive`, popping exactly once per push.
 ///
 /// The cursor stack is process-wide, so an unbalanced `NSCursor.pop()` corrupts
@@ -4852,6 +4986,9 @@ private struct FilePreviewCSVView: View {
     @State private var redoStack = FilePreviewCSVUndoStack<CSVPreviewDocument.Row>()
     @State private var hasUnsavedEdits = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var search = FilePreviewCSVSearch()
+    @State private var isFindPresented = false
+    @FocusState private var findFieldFocused: Bool
     @Environment(\.controlActiveState) private var controlActiveState
     @FocusState private var editorFocused: Bool
     @FocusState private var gridFocused: Bool
@@ -4876,7 +5013,15 @@ private struct FilePreviewCSVView: View {
             // Panel lost key focus — the user has moved on, so write now.
             if state != .key { flushSave() }
         }
-        .onDisappear { flushSave() }
+        .onDisappear {
+            flushSave()
+            panel.csvFindIsPresented = false
+        }
+        .onChange(of: panel.csvFindSignal) { _, signal in
+            guard let signal else { return }
+            handleFindSignal(signal)
+        }
+        .task(id: search.query) { await recomputeMatches(for: document) }
         .task(id: panel.filePath) {
             let url = URL(fileURLWithPath: panel.filePath)
             let loaded = await Task.detached(priority: .userInitiated) {
@@ -4917,24 +5062,37 @@ private struct FilePreviewCSVView: View {
         let totalWidth = layout.totalWidth + Self.selectGutterWidth
         let gridLine = Color(nsColor: foregroundColor).opacity(0.08)
         return VStack(spacing: 0) {
-            ScrollView([.horizontal, .vertical], showsIndicators: true) {
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section(header: headerRow(for: document, gridLine: gridLine)) {
-                        ForEach(document.rows) { row in
-                            cellRow(row, document: document)
-                                .background(
-                                    row.id.isMultiple(of: 2)
-                                        ? Color.clear
-                                        : Color(nsColor: foregroundColor).opacity(0.035)
-                                )
-                                .overlay(alignment: .bottom) {
-                                    gridLine.frame(height: 1)
-                                }
+            ScrollViewReader { proxy in
+                ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section(header: headerRow(for: document, gridLine: gridLine)) {
+                            ForEach(document.rows) { row in
+                                cellRow(row, document: document)
+                                    .background(
+                                        row.id.isMultiple(of: 2)
+                                            ? Color.clear
+                                            : Color(nsColor: foregroundColor).opacity(0.035)
+                                    )
+                                    .overlay(alignment: .bottom) {
+                                        gridLine.frame(height: 1)
+                                    }
+                            }
                         }
                     }
+                    .frame(width: max(totalWidth, 1), alignment: .leading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-                .frame(width: max(totalWidth, 1), alignment: .leading)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .overlay(alignment: .topTrailing) {
+                    if isFindPresented {
+                        findBar
+                            .padding(.top, 8)
+                            .padding(.trailing, 16)
+                    }
+                }
+                .onChange(of: search.currentIndex) { _, _ in
+                    guard let match = search.currentMatch else { return }
+                    proxy.scrollTo(match.rowID, anchor: .center)
+                }
             }
             if document.truncated {
                 Text(String(
@@ -5011,6 +5169,129 @@ private struct FilePreviewCSVView: View {
         .onKeyPress(phases: [.down, .repeat]) { keyPress in
             handleKeyPress(keyPress)
         }
+    }
+
+    private var findBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            TextField(
+                String(localized: "filePreview.csv.findPlaceholder", defaultValue: "Find in sheet"),
+                text: $search.query
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .frame(width: 160)
+            .focused($findFieldFocused)
+            .onSubmit { stepMatch(by: 1) }
+            // Shift-return for the previous match: `onSubmit` cannot see the
+            // modifier, so the chord is read before the field commits.
+            .onKeyPress(.return, phases: [.down]) { keyPress in
+                stepMatch(by: keyPress.modifiers.contains(.shift) ? -1 : 1)
+                return .handled
+            }
+            .onExitCommand { closeFind() }
+            Text(matchCountLabel)
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 54, alignment: .trailing)
+            findStepButton(systemName: "chevron.up", offset: -1, hint: String(
+                localized: "filePreview.csv.findPrevious",
+                defaultValue: "Previous match (⇧⏎)"
+            ))
+            findStepButton(systemName: "chevron.down", offset: 1, hint: String(
+                localized: "filePreview.csv.findNext",
+                defaultValue: "Next match (⏎)"
+            ))
+            Button {
+                closeFind()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .help(String(localized: "filePreview.csv.findClose", defaultValue: "Close (esc)"))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 0.5)
+        )
+    }
+
+    private func findStepButton(systemName: String, offset: Int, hint: String) -> some View {
+        Button {
+            stepMatch(by: offset)
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .buttonStyle(.plain)
+        .disabled(search.matches.isEmpty)
+        .help(hint)
+    }
+
+    private var matchCountLabel: String {
+        if search.query.isEmpty { return "" }
+        guard let index = search.currentIndex else {
+            return String(localized: "filePreview.csv.findNoMatches", defaultValue: "No results")
+        }
+        return "\(index + 1) / \(search.matches.count)"
+    }
+
+    private func stepMatch(by offset: Int) {
+        guard !search.matches.isEmpty else { return }
+        search.step(by: offset)
+    }
+
+    private func openFind() {
+        isFindPresented = true
+        panel.csvFindIsPresented = true
+        findFieldFocused = true
+    }
+
+    private func closeFind() {
+        isFindPresented = false
+        panel.csvFindIsPresented = false
+        findFieldFocused = false
+        search.clear()
+        gridFocused = true
+    }
+
+    private func handleFindSignal(_ signal: FilePreviewCSVFindSignal) {
+        switch signal.intent {
+        case .open: openFind()
+        case .next: stepMatch(by: 1)
+        case .previous: stepMatch(by: -1)
+        }
+    }
+
+    /// Rescans the sheet whenever the query changes.
+    ///
+    /// The scan runs off the main actor because it is linear in cells and the
+    /// grid holds up to 50k rows; `.task(id:)` cancels the previous scan when
+    /// the next keystroke lands, which also debounces fast typing.
+    private func recomputeMatches(for document: CSVPreviewDocument?) async {
+        let query = search.query
+        guard !query.isEmpty, let document else {
+            search.apply([])
+            return
+        }
+        let rowIDs = document.rows.map(\.id)
+        let cells = document.rows.map(\.cells)
+        let found = await Task.detached(priority: .userInitiated) {
+            FilePreviewCSVSearch.matches(for: query, rowIDs: rowIDs, cells: cells)
+        }.value
+        guard !Task.isCancelled else { return }
+        search.apply(found)
     }
 
     private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
@@ -5215,6 +5496,12 @@ private struct FilePreviewCSVView: View {
                         rowID: row.id,
                         column: column,
                         isEditable: document.isEditable
+                    )
+                    .modifier(
+                        CSVMatchHighlight(
+                            isMatch: search.isMatch(rowID: row.id, column: column),
+                            isCurrent: search.isCurrent(rowID: row.id, column: column)
+                        )
                     )
                 }
             }

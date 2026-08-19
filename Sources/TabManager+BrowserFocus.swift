@@ -32,6 +32,16 @@ extension TabManager {
         return panel
     }
 
+    /// Returns the focused panel if it is a file preview showing the CSV grid,
+    /// which owns its own find bar rather than the terminal or browser one.
+    var focusedCSVFilePreviewPanel: FilePreviewPanel? {
+        guard let tab = selectedWorkspace,
+              let panelId = tab.focusedPanelId,
+              let panel = tab.panels[panelId] as? FilePreviewPanel,
+              panel.previewMode == .csv else { return nil }
+        return panel
+    }
+
     /// Returns the focused panel if it's a MarkdownPanel showing the rendered
     /// preview, nil otherwise. Zoom applies to the preview WKWebView, so the raw
     /// text-edit mode is deliberately excluded.

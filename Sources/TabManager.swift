@@ -784,6 +784,9 @@ class TabManager: ObservableObject {
 #endif
             return handled
         }
+        if let csvPanel = focusedCSVFilePreviewPanel {
+            return csvPanel.requestCSVFind()
+        }
         guard let browserPanel = focusedBrowserPanel else { return false }
         browserPanel.startFind()
         return browserPanel.searchState != nil
@@ -809,6 +812,7 @@ class TabManager: ObservableObject {
             _ = panel.performBindingAction("search:next")
             return
         }
+        if focusedCSVFilePreviewPanel?.requestCSVFindStep(.next) == true { return }
 
         focusedBrowserPanel?.findNext()
     }
@@ -818,6 +822,7 @@ class TabManager: ObservableObject {
             _ = panel.performBindingAction("search:previous")
             return
         }
+        if focusedCSVFilePreviewPanel?.requestCSVFindStep(.previous) == true { return }
 
         focusedBrowserPanel?.findPrevious()
     }
