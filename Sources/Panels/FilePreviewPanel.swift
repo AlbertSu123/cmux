@@ -5803,6 +5803,14 @@ private struct FilePreviewCSVView: View {
     /// Width of the leading select gutter, matched by the header's spacer.
     private static let selectGutterWidth: CGFloat = 26
 
+    /// One edge of the band drawn around the clicked row.
+    @ViewBuilder
+    private func selectionRule(isSelected: Bool) -> some View {
+        if isSelected {
+            Color.accentColor.frame(height: 1.5)
+        }
+    }
+
     private func selectBox(rowID: Int, document: CSVPreviewDocument) -> some View {
         Image(systemName: checkedRowIDs.contains(rowID) ? "checkmark.square.fill" : "square")
             .font(.system(size: 11))
@@ -5877,6 +5885,11 @@ private struct FilePreviewCSVView: View {
                 ? Color.accentColor.opacity(0.18)
                 : Color.clear
         )
+        // A tint alone is easy to lose against the zebra striping and the find
+        // highlight. The rules span the row, so the mark stays visible wherever
+        // the sheet is scrolled sideways — a leading-edge bar would scroll off.
+        .overlay(alignment: .top) { selectionRule(isSelected: selectedRowID == row.id) }
+        .overlay(alignment: .bottom) { selectionRule(isSelected: selectedRowID == row.id) }
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRowID = row.id
