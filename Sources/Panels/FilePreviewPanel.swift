@@ -5146,6 +5146,14 @@ private struct FilePreviewCSVView: View {
     @State private var search = FilePreviewCSVSearch()
     @State private var scrollHandle = ScrollViewHandle()
     @State private var sort = FilePreviewCSVSort()
+    /// Modification date of the last write this view made. A watch event whose
+    /// mtime matches it is our own save echoing back, not somebody else's edit.
+    @State private var lastSelfWriteDate: Date?
+    /// Bumped on every load so derived work keyed on it — the find scan — reruns
+    /// against the new rows instead of holding matches for rows that are gone.
+    @State private var documentVersion = 0
+    /// The file changed underneath edits that have not been written yet.
+    @State private var externalChangeBlocked = false
     /// Rows in the order they are shown. Sorting is a view over the document:
     /// the document keeps file order, so clicking a header never rewrites the
     /// user's file on the next autosave.
@@ -5185,7 +5193,10 @@ private struct FilePreviewCSVView: View {
             handleFindSignal(signal)
         }
         .onChange(of: sort) { _, _ in rebuildDisplayRows(from: document) }
-        .task(id: SearchScan(query: search.query, sort: sort)) { await recomputeMatches() }
+        .task(id: SearchScan(query: search.query, sort: sort, version: documentVersion)) {
+            await recomputeMatches()
+        }
+        .task(id: panel.filePath) { await watchFileForChanges(path: panel.filePath) }
         .task(id: panel.filePath) {
             let url = URL(fileURLWithPath: panel.filePath)
             let loaded = await Task.detached(priority: .userInitiated) {
@@ -5193,6 +5204,11 @@ private struct FilePreviewCSVView: View {
             }.value
             document = loaded
             loadFailed = loaded == nil
+            documentVersion += 1
+            externalChangeBlocked = false
+            // Baseline for the watcher: without it the event the watcher emits
+            // as it attaches reads as an external change and reloads at once.
+            lastSelfWriteDate = Self.modificationDate(of: url)
             // A new file starts unsorted; carrying a previous file's sort keys
             // over would order the new sheet by whatever columns happened to
             // share an index.
@@ -5307,6 +5323,17 @@ private struct FilePreviewCSVView: View {
                 .padding(.vertical, 4)
                 .background(.bar)
             }
+            if externalChangeBlocked {
+                Text(String(
+                    localized: "filePreview.csv.changedOnDisk",
+                    defaultValue: "This file changed on disk — saving your edits will overwrite that change"
+                ))
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
             if hasUnsavedEdits && saveError == nil {
                 Text(String(
                     localized: "filePreview.csv.unsaved",
@@ -5350,11 +5377,82 @@ private struct FilePreviewCSVView: View {
     private struct SearchScan: Equatable, Hashable {
         let query: String
         let sort: FilePreviewCSVSort
+        let version: Int
     }
 
     /// Takes the document explicitly rather than reading `@State` that a caller
     /// may have just written, which is not guaranteed to read back as the new
     /// value inside the same closure.
+    private static func modificationDate(of url: URL) -> Date? {
+        try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+
+    /// Reloads the sheet whenever the file changes underneath it.
+    ///
+    /// `FileWatcher` handles inode reattachment and nearest-ancestor recovery,
+    /// which matters here because most tools rewrite a CSV by writing a temp
+    /// file and renaming it over the original — the path survives, the inode
+    /// does not. The throttle collapses the burst that one such save produces
+    /// into a single reload.
+    private func watchFileForChanges(path: String) async {
+        let watcher = FileWatcher(path: path, throttle: .milliseconds(250))
+        for await _ in watcher.events {
+            if Task.isCancelled { break }
+            // A different file is previewed now; this watcher is on its way out.
+            guard panel.filePath == path else { break }
+            await reloadFromDiskIfChanged(path: path)
+        }
+    }
+
+    private func reloadFromDiskIfChanged(path: String) async {
+        let url = URL(fileURLWithPath: path)
+        // Our own save, echoing back through the watcher. Reloading here would
+        // be pointless work at best, and at worst would fight the next edit.
+        if let modified = Self.modificationDate(of: url), modified == lastSelfWriteDate {
+            return
+        }
+        // Never take the user's work away: unwritten edits and an open cell
+        // editor both outrank a newer copy on disk. Say so instead.
+        guard !hasUnsavedEdits, editingCell == nil else {
+            externalChangeBlocked = true
+            return
+        }
+        let loaded = await Task.detached(priority: .userInitiated) {
+            CSVPreviewDocument.load(url: url)
+        }.value
+        guard !Task.isCancelled, panel.filePath == path, let loaded else { return }
+        applyReloadedDocument(loaded)
+    }
+
+    /// Swaps in a reloaded document while keeping as much of the view as still
+    /// makes sense. A row appended by another process should not cost the user
+    /// their column widths, ordering, sort, or selection.
+    private func applyReloadedDocument(_ loaded: CSVPreviewDocument) {
+        document = loaded
+        loadFailed = false
+        externalChangeBlocked = false
+        documentVersion += 1
+        lastSelfWriteDate = Self.modificationDate(of: URL(fileURLWithPath: panel.filePath))
+
+        // Column-shaped state only survives while the shape does.
+        if layout.columnCount != loaded.columnWidths.count {
+            layout = FilePreviewCSVColumnLayout(widths: loaded.columnWidths)
+            sort.clear()
+            selectedColumn = nil
+        }
+
+        let liveRowIDs = Set(loaded.rows.map(\.id))
+        checkedRowIDs.formIntersection(liveRowIDs)
+        if let selected = selectedRowID, !liveRowIDs.contains(selected) {
+            selectedRowID = nil
+        }
+        if let anchor = checkAnchorRowID, !liveRowIDs.contains(anchor) {
+            checkAnchorRowID = nil
+        }
+
+        rebuildDisplayRows(from: loaded)
+    }
+
     private func rebuildDisplayRows(from document: CSVPreviewDocument?) {
         guard let document else {
             displayRows = []
@@ -5982,9 +6080,14 @@ private struct FilePreviewCSVView: View {
         // file's contents.
         let target = path ?? panel.filePath
         do {
-            try document.save(to: URL(fileURLWithPath: target))
+            let url = URL(fileURLWithPath: target)
+            try document.save(to: url)
+            lastSelfWriteDate = Self.modificationDate(of: url)
             hasUnsavedEdits = false
             saveError = nil
+            // Our content is the file now, so whatever landed underneath it has
+            // already been overwritten; there is nothing left to warn about.
+            externalChangeBlocked = false
         } catch {
             saveError = error.localizedDescription
         }
