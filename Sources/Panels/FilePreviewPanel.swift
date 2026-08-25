@@ -5154,6 +5154,8 @@ private struct FilePreviewCSVView: View {
     @State private var documentVersion = 0
     /// The file changed underneath edits that have not been written yet.
     @State private var externalChangeBlocked = false
+    @State private var didCopy = false
+    @State private var copyFeedbackTask: Task<Void, Never>?
     /// Rows in the order they are shown. Sorting is a view over the document:
     /// the document keeps file order, so clicking a header never rewrites the
     /// user's file on the next autosave.
@@ -5272,11 +5274,12 @@ private struct FilePreviewCSVView: View {
                     )
                 }
                 .overlay(alignment: .topTrailing) {
-                    if isFindPresented {
-                        findBar
-                            .padding(.top, 8)
-                            .padding(.trailing, 16)
+                    HStack(alignment: .top, spacing: 8) {
+                        if isFindPresented { findBar }
+                        copyButton(for: document)
                     }
+                    .padding(.top, 8)
+                    .padding(.trailing, 16)
                 }
                 .onChange(of: search.currentIndex) { _, _ in
                     guard let match = search.currentMatch else { return }
@@ -5525,6 +5528,71 @@ private struct FilePreviewCSVView: View {
             localized: "filePreview.csv.sortHint",
             defaultValue: "Sort ascending, descending, then off · sorting a second column breaks ties within the first"
         ))
+    }
+
+    private func copyButton(for document: CSVPreviewDocument) -> some View {
+        Button {
+            copyDisplayedCSV(document)
+        } label: {
+            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(didCopy ? Color.accentColor : Color.secondary)
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.regularMaterial)
+                        .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(copyButtonHint)
+    }
+
+    private var copyButtonHint: String {
+        checkedRowIDs.isEmpty
+            ? String(
+                localized: "filePreview.csv.copyAll",
+                defaultValue: "Copy the whole sheet as CSV"
+            )
+            : String(
+                localized: "filePreview.csv.copySelected",
+                defaultValue: "Copy \(checkedRowIDs.count) selected rows as CSV"
+            )
+    }
+
+    /// Copies the sheet as the user currently sees it — the column order they
+    /// arranged, the row order they sorted — rather than the order on disk,
+    /// since what is on screen is why they are copying rather than reading the
+    /// file. Checked rows narrow it; the header always comes along so the
+    /// result pastes as a table rather than a fragment.
+    private func copyDisplayedCSV(_ document: CSVPreviewDocument) {
+        let columns = layout.order.filter { $0 < document.header.count }
+        let header = columns.map { document.header[$0] }
+        let sourceRows = checkedRowIDs.isEmpty
+            ? displayRows
+            : displayRows.filter { checkedRowIDs.contains($0.id) }
+        let rows = sourceRows.map { row in
+            columns.map { column in column < row.cells.count ? row.cells[column] : "" }
+        }
+        let text = FilePreviewCSVSerializer.serialize(
+            header: header,
+            rows: rows,
+            delimiter: document.delimiter
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+
+        didCopy = true
+        copyFeedbackTask?.cancel()
+        copyFeedbackTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            didCopy = false
+        }
     }
 
     private var findBar: some View {
