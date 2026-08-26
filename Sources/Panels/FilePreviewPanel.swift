@@ -1008,6 +1008,13 @@ final class FilePreviewPanel: Panel, ObservableObject, FilePreviewTextEditingPan
     /// publishing it would re-render the grid on open and close.
     var csvFindIsPresented = false
     private var csvFindToken = 0
+    /// Bumped by the header's copy button. The grid owns the column order, the
+    /// sort and the checked rows, so it performs the copy; only the intent
+    /// crosses, exactly as it does for find.
+    @Published private(set) var csvCopyToken = 0
+    /// Drives the header button's checkmark once a copy lands.
+    @Published private(set) var csvCopyDidConfirm = false
+    private var csvCopyConfirmationTask: Task<Void, Never>?
 
     let nativeViewSessions = FilePreviewNativeViewSessions()
 
@@ -1064,6 +1071,22 @@ final class FilePreviewPanel: Panel, ObservableObject, FilePreviewTextEditingPan
         guard previewMode == .csv, csvFindIsPresented else { return false }
         signalCSVFind(intent)
         return true
+    }
+
+    func requestCSVCopy() {
+        guard previewMode == .csv else { return }
+        csvCopyToken += 1
+    }
+
+    /// Called by the grid once the sheet is on the pasteboard.
+    func confirmCSVCopy() {
+        csvCopyDidConfirm = true
+        csvCopyConfirmationTask?.cancel()
+        csvCopyConfirmationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            self?.csvCopyDidConfirm = false
+        }
     }
 
     private func signalCSVFind(_ intent: FilePreviewCSVFindIntent) {
@@ -1381,6 +1404,18 @@ struct FilePreviewPanelView: View {
                     label: String(localized: "filePreview.save", defaultValue: "Save"),
                     isDisabled: !panel.isDirty || panel.isSaving,
                     action: { panel.saveTextContent() }
+                )
+            }
+
+            if panel.previewMode == .csv {
+                PanelHeaderIconButton(
+                    systemName: panel.csvCopyDidConfirm ? "checkmark" : "doc.on.doc",
+                    label: String(
+                        localized: "filePreview.csv.copy",
+                        defaultValue: "Copy CSV"
+                    ),
+                    isDisabled: panel.isFileUnavailable,
+                    action: { panel.requestCSVCopy() }
                 )
             }
 
@@ -5154,8 +5189,6 @@ private struct FilePreviewCSVView: View {
     @State private var documentVersion = 0
     /// The file changed underneath edits that have not been written yet.
     @State private var externalChangeBlocked = false
-    @State private var didCopy = false
-    @State private var copyFeedbackTask: Task<Void, Never>?
     /// Rows in the order they are shown. Sorting is a view over the document:
     /// the document keeps file order, so clicking a header never rewrites the
     /// user's file on the next autosave.
@@ -5195,6 +5228,10 @@ private struct FilePreviewCSVView: View {
             handleFindSignal(signal)
         }
         .onChange(of: sort) { _, _ in rebuildDisplayRows(from: document) }
+        .onChange(of: panel.csvCopyToken) { _, _ in
+            guard let document else { return }
+            copyDisplayedCSV(document)
+        }
         .task(id: SearchScan(query: search.query, sort: sort, version: documentVersion)) {
             await recomputeMatches()
         }
@@ -5274,12 +5311,11 @@ private struct FilePreviewCSVView: View {
                     )
                 }
                 .overlay(alignment: .topTrailing) {
-                    HStack(alignment: .top, spacing: 8) {
-                        if isFindPresented { findBar }
-                        copyButton(for: document)
+                    if isFindPresented {
+                        findBar
+                            .padding(.top, 8)
+                            .padding(.trailing, 16)
                     }
-                    .padding(.top, 8)
-                    .padding(.trailing, 16)
                 }
                 .onChange(of: search.currentIndex) { _, _ in
                     guard let match = search.currentMatch else { return }
@@ -5530,40 +5566,6 @@ private struct FilePreviewCSVView: View {
         ))
     }
 
-    private func copyButton(for document: CSVPreviewDocument) -> some View {
-        Button {
-            copyDisplayedCSV(document)
-        } label: {
-            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(didCopy ? Color.accentColor : Color.secondary)
-                .frame(width: 24, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(.regularMaterial)
-                        .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 0.5)
-                )
-        }
-        .buttonStyle(.plain)
-        .help(copyButtonHint)
-    }
-
-    private var copyButtonHint: String {
-        checkedRowIDs.isEmpty
-            ? String(
-                localized: "filePreview.csv.copyAll",
-                defaultValue: "Copy the whole sheet as CSV"
-            )
-            : String(
-                localized: "filePreview.csv.copySelected",
-                defaultValue: "Copy \(checkedRowIDs.count) selected rows as CSV"
-            )
-    }
-
     /// Copies the sheet as the user currently sees it — the column order they
     /// arranged, the row order they sorted — rather than the order on disk,
     /// since what is on screen is why they are copying rather than reading the
@@ -5585,14 +5587,7 @@ private struct FilePreviewCSVView: View {
         )
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-
-        didCopy = true
-        copyFeedbackTask?.cancel()
-        copyFeedbackTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.5))
-            guard !Task.isCancelled else { return }
-            didCopy = false
-        }
+        panel.confirmCSVCopy()
     }
 
     private var findBar: some View {
