@@ -25,6 +25,11 @@ final class MainWindowVisibilityController {
 
     enum Activation {
         case none
+        /// `NSApplication.activate()` — the in-process self-activation path added
+        /// in macOS 14. `NSRunningApplication.activate` arbitrates through the
+        /// window server as if another process were asking, which costs a round
+        /// trip an app does not need to raise itself.
+        case application
         case runningApplication(NSApplication.ActivationOptions)
     }
 
@@ -92,6 +97,7 @@ final class MainWindowVisibilityController {
         var hideApplication: @MainActor () -> Void
         var unhideApplication: @MainActor () -> Void
         var activateRunningApplication: @MainActor (NSApplication.ActivationOptions) -> Void
+        var activateApplication: @MainActor () -> Void
         var windowOperations: WindowOperations
 
         init(
@@ -106,6 +112,7 @@ final class MainWindowVisibilityController {
             activateRunningApplication: @escaping @MainActor (NSApplication.ActivationOptions) -> Void = {
                 NSRunningApplication.current.activate(options: $0)
             },
+            activateApplication: @escaping @MainActor () -> Void = { NSApp.activate() },
             windowOperations: WindowOperations? = nil
         ) {
             self.isActivationSuppressed = isActivationSuppressed
@@ -117,6 +124,7 @@ final class MainWindowVisibilityController {
             self.hideApplication = hideApplication
             self.unhideApplication = unhideApplication
             self.activateRunningApplication = activateRunningApplication
+            self.activateApplication = activateApplication
             self.windowOperations = windowOperations ?? WindowOperations.live
         }
     }
@@ -459,6 +467,8 @@ final class MainWindowVisibilityController {
         switch activation {
         case .none:
             break
+        case .application:
+            dependencies.activateApplication()
         case .runningApplication(let options):
             dependencies.activateRunningApplication(options)
         }

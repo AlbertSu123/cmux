@@ -16340,9 +16340,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func bringToFront(
         _ window: NSWindow,
-        reason: MainWindowVisibilityController.Reason = .focusMainWindow
+        reason: MainWindowVisibilityController.Reason = .focusMainWindow,
+        activation: MainWindowVisibilityController.Activation = .runningApplication([.activateAllWindows]),
+        activationTiming: MainWindowVisibilityController.ActivationTiming = .afterWindowOrdering
     ) {
-        _ = mainWindowVisibilityController.focus(window, reason: reason)
+        _ = mainWindowVisibilityController.focus(
+            window,
+            reason: reason,
+            activation: activation,
+            activationTiming: activationTiming
+        )
     }
 
 #if DEBUG
