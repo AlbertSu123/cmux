@@ -19,7 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
-BRANCH="albert/patches"
+BRANCH="main"
 UPSTREAM_REMOTE="origin"
 FORK_REMOTE="fork"
 BUILD_TAG="albert-update"
