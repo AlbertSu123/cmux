@@ -62,6 +62,27 @@ struct FilePreviewCSVColumnLayout: Equatable {
         widths[column] = Self.clamped(width)
     }
 
+    /// Drops a column and renumbers the rest.
+    ///
+    /// Widths and `order` both hold *source* indices, so removing one shifts
+    /// every higher index down by one. Renumbering here keeps that arithmetic
+    /// in the one type that owns it rather than at each call site.
+    mutating func removeColumn(_ column: Int) {
+        guard widths.indices.contains(column) else { return }
+        widths.remove(at: column)
+        order.removeAll { $0 == column }
+        order = order.map { $0 > column ? $0 - 1 : $0 }
+    }
+
+    /// Puts a column back at `column`, restoring the slot it occupied.
+    mutating func insertColumn(_ column: Int, width: CGFloat, atDisplayIndex displayIndex: Int?) {
+        let target = min(max(column, 0), widths.count)
+        widths.insert(Self.clamped(width), at: target)
+        order = order.map { $0 >= target ? $0 + 1 : $0 }
+        let slot = min(max(displayIndex ?? order.count, 0), order.count)
+        order.insert(target, at: slot)
+    }
+
     /// Leading x offset of a display slot, in points from the grid's left edge.
     func offset(ofDisplayIndex index: Int) -> CGFloat {
         let ordered = orderedWidths

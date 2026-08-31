@@ -4598,6 +4598,37 @@ private struct CSVPreviewDocument {
         rows.removeAll { $0.id == id }
     }
 
+    /// Removes a column from the header and every row, handing back what it
+    /// held so the deletion can be undone.
+    mutating func deleteColumn(at index: Int) -> (name: String, values: [String])? {
+        guard header.indices.contains(index) else { return nil }
+        let name = header.remove(at: index)
+        var values: [String] = []
+        values.reserveCapacity(rows.count)
+        for rowIndex in rows.indices {
+            if index < rows[rowIndex].cells.count {
+                values.append(rows[rowIndex].cells.remove(at: index))
+            } else {
+                // Short rows are legal in a CSV; they simply had nothing here.
+                values.append("")
+            }
+        }
+        return (name, values)
+    }
+
+    mutating func insertColumn(name: String, values: [String], at index: Int) {
+        let target = min(max(index, 0), header.count)
+        header.insert(name, at: target)
+        for rowIndex in rows.indices {
+            let value = rowIndex < values.count ? values[rowIndex] : ""
+            if target <= rows[rowIndex].cells.count {
+                rows[rowIndex].cells.insert(value, at: target)
+            } else {
+                rows[rowIndex].cells.append(value)
+            }
+        }
+    }
+
     mutating func insertRow(_ row: Row, at index: Int) {
         rows.insert(row, at: min(max(index, 0), rows.count))
     }
@@ -4621,6 +4652,12 @@ private struct CSVPreviewDocument {
             let row = rows[index]
             deleteRow(id: rowID)
             return .insertRow(index: index, row: row)
+        case let .insertColumn(index, name, values):
+            insertColumn(name: name, values: values, at: index)
+            return .removeColumn(index: index)
+        case let .removeColumn(index):
+            guard let removed = deleteColumn(at: index) else { return nil }
+            return .insertColumn(index: index, name: removed.name, values: removed.values)
         }
     }
 
@@ -4795,6 +4832,15 @@ struct FilePreviewCSVSort: Equatable, Hashable {
 
     mutating func remove(column: Int) {
         keys.removeAll { $0.column == column }
+    }
+
+    /// Drops any key on `column` and renumbers the rest, so a sort keeps
+    /// pointing at the columns it was sorting after one is deleted.
+    mutating func columnRemoved(_ column: Int) {
+        keys.removeAll { $0.column == column }
+        keys = keys.map { key in
+            Key(column: key.column > column ? key.column - 1 : key.column, direction: key.direction)
+        }
     }
 
     mutating func clear() {
@@ -5531,7 +5577,57 @@ private struct FilePreviewCSVView: View {
                     defaultValue: "Clear All Sorts"
                 )) { sort.clear() }
             }
+            if let document, document.isEditable {
+                Divider()
+                Button(
+                    String(
+                        localized: "filePreview.csv.deleteColumn",
+                        defaultValue: "Delete Column"
+                    ),
+                    role: .destructive
+                ) { deleteColumn(column, in: document) }
+            }
         }
+    }
+
+    /// Deletes a column from the sheet and every structure that indexes into it.
+    ///
+    /// Column ids here are positions, not stable identifiers, so removing one
+    /// renumbers everything above it: the layout's widths and order, the sort
+    /// keys, the selected column, and any open editor. Each is corrected before
+    /// the document is persisted so nothing is left pointing at a column that
+    /// has moved or gone.
+    private func deleteColumn(_ column: Int, in document: CSVPreviewDocument) {
+        guard document.isEditable else { return }
+        var updated = document
+        guard let removed = updated.deleteColumn(at: column) else { return }
+
+        undoStack.record(.insertColumn(index: column, name: removed.name, values: removed.values))
+        redoStack.removeAll()
+
+        var movedLayout = layout
+        movedLayout.removeColumn(column)
+        layout = movedLayout
+
+        var movedSort = sort
+        movedSort.columnRemoved(column)
+        sort = movedSort
+
+        if let selected = selectedColumn {
+            selectedColumn = selected == column ? nil : (selected > column ? selected - 1 : selected)
+        }
+        if let editing = editingCell {
+            editingCell = editing.column == column
+                ? nil
+                : (editing.column > column
+                    ? EditingCell(rowID: editing.rowID, column: editing.column - 1)
+                    : editing)
+        }
+        // Match rows index by column, so any hit above the deletion now points
+        // at the wrong cell; the version bump reruns the scan.
+        documentVersion += 1
+
+        persist(updated)
     }
 
     private func applySort(column: Int, direction: FilePreviewCSVSort.Direction) {
@@ -6093,11 +6189,41 @@ private struct FilePreviewCSVView: View {
         scrollView.reflectScrolledClipView(clipView)
     }
 
+    /// Keeps the column-indexed view state in step when an undo or redo adds or
+    /// removes a column. Without this the layout would hold a different number
+    /// of widths than the document has columns, and the grid would render
+    /// against stale indices.
+    private func reconcileColumns(for entry: FilePreviewCSVUndoStack<CSVPreviewDocument.Row>.Entry) {
+        switch entry {
+        case let .insertColumn(index, _, _):
+            var updated = layout
+            updated.insertColumn(
+                index,
+                width: FilePreviewCSVColumnLayout.minimumWidth * 3,
+                atDisplayIndex: index
+            )
+            layout = updated
+            documentVersion += 1
+        case let .removeColumn(index):
+            var updatedLayout = layout
+            updatedLayout.removeColumn(index)
+            layout = updatedLayout
+            var updatedSort = sort
+            updatedSort.columnRemoved(index)
+            sort = updatedSort
+            selectedColumn = nil
+            documentVersion += 1
+        case .setCell, .insertRow, .removeRow:
+            break
+        }
+    }
+
     private func undoLastEdit() {
         guard var doc = document, doc.isEditable, let entry = undoStack.popLast() else { return }
         guard let inverse = doc.apply(entry) else { return }
         redoStack.record(inverse)
         focusRow(for: entry)
+        reconcileColumns(for: entry)
         editingCell = nil
         persist(doc)
     }
@@ -6107,6 +6233,7 @@ private struct FilePreviewCSVView: View {
         guard let inverse = doc.apply(entry) else { return }
         undoStack.record(inverse)
         focusRow(for: entry)
+        reconcileColumns(for: entry)
         editingCell = nil
         persist(doc)
     }
@@ -6116,6 +6243,9 @@ private struct FilePreviewCSVView: View {
         case let .setCell(rowID, _, _): selectedRowID = rowID
         case let .insertRow(_, row): selectedRowID = row.id
         case let .removeRow(rowID): if selectedRowID == rowID { selectedRowID = nil }
+        // Column entries leave every row in place, so the row selection is
+        // still whatever the user last picked.
+        case .insertColumn, .removeColumn: break
         }
     }
 

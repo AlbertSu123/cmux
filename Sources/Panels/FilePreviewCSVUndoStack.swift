@@ -16,6 +16,15 @@ struct FilePreviewCSVUndoStack<Row> {
         /// Remove a row again — the inverse of `insertRow`, used when redoing
         /// a deletion that was undone.
         case removeRow(rowID: Int)
+        /// Put a deleted column back, with the values every row held in it.
+        ///
+        /// Unlike the entries above this one is proportional to the row count.
+        /// That is affordable here for the reason a snapshot per keystroke is
+        /// not: deleting a column is a deliberate, occasional act, so the cost
+        /// is paid once rather than on every edit.
+        case insertColumn(index: Int, name: String, values: [String])
+        /// Delete the column again — the inverse of `insertColumn`.
+        case removeColumn(index: Int)
     }
 
     /// Deep enough for a long editing session, bounded so history cannot grow
