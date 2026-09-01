@@ -97,7 +97,6 @@ extension Workspace {
         sidebarProcessTitleObservation.processTitleDidChange()
     }
 
-    @discardableResult
     func updatePanelTitle(panelId: UUID, title: String) -> Bool {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, panels[panelId] != nil else { return false }

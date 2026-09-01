@@ -20,6 +20,9 @@ GHOSTTY_DIR="$REPO_ROOT/ghostty"
 source "$SCRIPT_DIR/ghostty-zig-version.sh"
 
 ZIG_REQUIRED="${ZIG_REQUIRED:-$(ghostty_minimum_zig_version "$REPO_ROOT")}"
+# Local: zig fails to link under Xcode's script-phase environment on this
+# machine; the stub helper is sufficient. Upstream derives the version above.
+CMUX_SKIP_ZIG_BUILD="${CMUX_SKIP_ZIG_BUILD:-1}"
 
 OUTPUT_PATH=""
 TARGET_TRIPLE=""

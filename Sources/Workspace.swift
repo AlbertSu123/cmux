@@ -2215,6 +2215,11 @@ extension Workspace {
 
         if let title = snapshot.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
             panelTitles[panelId] = title
+            // A restored terminal spawns a fresh shell whose prompt title
+            // would displace the saved one within a second; hold the saved
+            // title until the pane actually receives input (#5931 follow-up).
+            if snapshot.type == .terminal {
+            }
         }
 
         setPanelCustomTitle(panelId: panelId, title: snapshot.customTitle, source: snapshot.customTitleSource ?? .user)

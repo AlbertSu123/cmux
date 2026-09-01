@@ -1,0 +1,136 @@
+import CoreGraphics
+import Foundation
+
+/// Column geometry and display ordering for the CSV preview grid.
+///
+/// This is a pure value type on purpose: the grid renders its rows inside a
+/// `LazyVStack`, and the snapshot-boundary rule forbids anything below that
+/// boundary from holding a reference to an observable store. Rows receive a
+/// copy of this struct, never a binding to one.
+struct FilePreviewCSVColumnLayout: Equatable {
+    /// Narrow enough to collapse a column to a stub, wide enough to stay grabbable.
+    static let minimumWidth: CGFloat = 44
+    static let maximumWidth: CGFloat = 1200
+
+    /// Widths indexed by *source* column (the order the columns appear in the file).
+    private(set) var widths: [CGFloat]
+    /// Source column indices in display order.
+    private(set) var order: [Int]
+
+    init(widths: [CGFloat]) {
+        self.widths = widths.map(Self.clamped)
+        self.order = Array(widths.indices)
+    }
+
+    /// Clamp to the allowed range and snap to whole points. Sub-point widths
+    /// let a column oscillate between two rounded layouts on consecutive drag
+    /// updates, which reads as a shimmer while dragging.
+    static func clamped(_ width: CGFloat) -> CGFloat {
+        min(max(width.rounded(), minimumWidth), maximumWidth)
+    }
+
+    var columnCount: Int { widths.count }
+
+    /// Widths laid out left to right as the user currently sees them.
+    var orderedWidths: [CGFloat] { order.map { widths[$0] } }
+
+    var totalWidth: CGFloat { widths.reduce(0, +) }
+
+    /// Display slot a source column currently occupies, or nil if unknown.
+    func displayIndex(ofColumn column: Int) -> Int? {
+        order.firstIndex(of: column)
+    }
+
+    /// Move a source column one slot left (-1) or right (+1). Returns false at
+    /// the ends so a caller can leave the keystroke unhandled.
+    @discardableResult
+    mutating func shift(column: Int, by offset: Int) -> Bool {
+        guard let from = displayIndex(ofColumn: column) else { return false }
+        let destination = from + offset
+        guard destination >= 0, destination < order.count else { return false }
+        move(fromDisplayIndex: from, toDisplayIndex: destination)
+        return true
+    }
+
+    func width(ofColumn column: Int) -> CGFloat {
+        widths.indices.contains(column) ? widths[column] : Self.minimumWidth
+    }
+
+    /// Resize a source column, clamping to the allowed range.
+    mutating func resize(column: Int, to width: CGFloat) {
+        guard widths.indices.contains(column) else { return }
+        widths[column] = Self.clamped(width)
+    }
+
+    /// Drops a column and renumbers the rest.
+    ///
+    /// Widths and `order` both hold *source* indices, so removing one shifts
+    /// every higher index down by one. Renumbering here keeps that arithmetic
+    /// in the one type that owns it rather than at each call site.
+    mutating func removeColumn(_ column: Int) {
+        guard widths.indices.contains(column) else { return }
+        widths.remove(at: column)
+        order.removeAll { $0 == column }
+        order = order.map { $0 > column ? $0 - 1 : $0 }
+    }
+
+    /// Puts a column back at `column`, restoring the slot it occupied.
+    mutating func insertColumn(_ column: Int, width: CGFloat, atDisplayIndex displayIndex: Int?) {
+        let target = min(max(column, 0), widths.count)
+        widths.insert(Self.clamped(width), at: target)
+        order = order.map { $0 >= target ? $0 + 1 : $0 }
+        let slot = min(max(displayIndex ?? order.count, 0), order.count)
+        order.insert(target, at: slot)
+    }
+
+    /// Leading x offset of a display slot, in points from the grid's left edge.
+    func offset(ofDisplayIndex index: Int) -> CGFloat {
+        let ordered = orderedWidths
+        guard ordered.indices.contains(index) else { return 0 }
+        return ordered[..<index].reduce(0, +)
+    }
+
+    /// Display slot a column dragged horizontally by `translation` should land in.
+    ///
+    /// Compares the dragged column's midpoint against its neighbours' midpoints
+    /// in the *pre-drag* coordinate space and counts how many it has passed, so
+    /// the drop target flips exactly when the column visually overtakes a
+    /// neighbour. Walking accumulated edges instead would double-count the
+    /// dragged column's own width and skip a slot on every drag.
+    func dropIndex(draggingDisplayIndex from: Int, translation: CGFloat) -> Int {
+        let ordered = orderedWidths
+        guard ordered.indices.contains(from) else { return from }
+        var centres: [CGFloat] = []
+        centres.reserveCapacity(ordered.count)
+        var edge: CGFloat = 0
+        for width in ordered {
+            centres.append(edge + width / 2)
+            edge += width
+        }
+        let dragged = centres[from] + translation
+        var destination = from
+        if translation > 0 {
+            var index = from + 1
+            while index < centres.count, centres[index] < dragged {
+                destination = index
+                index += 1
+            }
+        } else if translation < 0 {
+            var index = from - 1
+            while index >= 0, centres[index] > dragged {
+                destination = index
+                index -= 1
+            }
+        }
+        return destination
+    }
+
+    /// Move a column between display slots. Out-of-range slots are clamped.
+    mutating func move(fromDisplayIndex from: Int, toDisplayIndex to: Int) {
+        guard order.indices.contains(from) else { return }
+        let destination = min(max(to, 0), order.count - 1)
+        guard destination != from else { return }
+        let column = order.remove(at: from)
+        order.insert(column, at: destination)
+    }
+}

@@ -193,7 +193,19 @@ extension AppDelegate {
         }
 
         context.sidebarSelectionState.selection = .tabs
-        bringToFront(window)
+        // Clicking a notification is the one path where latency is the whole
+        // point, so it takes the fast route rather than the general one:
+        // `.application` uses NSApp.activate() instead of asking
+        // NSRunningApplication to arbitrate our own activation, and
+        // `.beforeWindowOrdering` activates first and orders second — the
+        // default order raises the window while the app is still inactive, so
+        // activation immediately redoes the same work. No .activateAllWindows:
+        // only the window holding the notification needs to come up.
+        bringToFront(
+            window,
+            activation: .application,
+            activationTiming: .beforeWindowOrdering
+        )
         let focusSurfaceId = surfaceId ?? panelId
         let completion = notificationOpenCompletion(
             tabManager: context.tabManager,

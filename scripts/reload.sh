@@ -6,10 +6,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/mobile-attach.sh"
 # shellcheck source=scripts/lib/dev-secrets.sh
 source "$SCRIPT_DIR/lib/dev-secrets.sh"
+# shellcheck source=scripts/lib/zig-darwin-sdk.sh
+source "$SCRIPT_DIR/lib/zig-darwin-sdk.sh"
 
 APP_NAME="cmux DEV"
 BUNDLE_ID="com.cmuxterm.app.debug"
 BASE_APP_NAME="cmux DEV"
+CONFIGURATION="Debug"
 DERIVED_DATA=""
 NAME_SET=0
 BUNDLE_SET=0
@@ -890,6 +893,9 @@ Options:
                          resolves to this normalized account.
   --name <app name>      Override app display/bundle name.
   --bundle-id <id>       Override bundle identifier.
+  --configuration <cfg>  Xcode build configuration (default: Debug). Release produces an
+                         optimized app but takes considerably longer to build, so keep the
+                         default for iteration and reserve Release for installed builds.
   --derived-data <path>  Override derived data path.
   --no-global-cli-links  Do not update /tmp/cmux-cli, /tmp/cmux-last-cli-path,
                          or PATH cmux-dev shims. Useful for isolated dogfood.
@@ -987,12 +993,12 @@ remove_app_bundle_output() {
   if [[ -z "$path" || ! -e "$path" ]]; then
     return 0
   fi
-  if [[ -z "${BUILD_PRODUCTS_DEBUG_DIR:-}" ]]; then
+  if [[ -z "${BUILD_PRODUCTS_DIR:-}" ]]; then
     echo "warning: refusing to remove app output without a build products directory: $path" >&2
     return 0
   fi
   case "$path" in
-    "$BUILD_PRODUCTS_DEBUG_DIR"/*.app)
+    "$BUILD_PRODUCTS_DIR"/*.app)
       rm -rf "$path"
       ;;
     *)
@@ -1049,8 +1055,8 @@ print_tag_cleanup_reminder() {
     if [[ "$tag" == "$current_slug" ]]; then
       continue
     fi
-    # Only surface stale debug tag builds.
-    if [[ ! -d "$path/Build/Products/Debug" ]]; then
+    # Only surface stale tag builds, in whichever configuration produced them.
+    if [[ ! -d "$path/Build/Products/Debug" && ! -d "$path/Build/Products/Release" ]]; then
       continue
     fi
     if [[ "$seen" == *" $tag "* ]]; then
@@ -1115,6 +1121,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       BUNDLE_SET=1
+      shift 2
+      ;;
+    --configuration)
+      CONFIGURATION="${2:-}"
+      if [[ -z "$CONFIGURATION" ]]; then
+        echo "error: --configuration requires a value" >&2
+        exit 1
+      fi
       shift 2
       ;;
     --launch)
@@ -1245,20 +1259,20 @@ RELOAD_LOG="/tmp/cmux-reload-${TAG_SLUG}.log"
 RELOAD_START_TIME="$(date +%s)"
 : > "$RELOAD_LOG"
 
-BUILD_PRODUCTS_DEBUG_DIR=""
+BUILD_PRODUCTS_DIR=""
 XCODEBUILD_SOURCE_APP_NAME="$APP_NAME"
 XCODEBUILD_SOURCE_APP_PATH=""
 XCODEBUILD_TAG_APP_PATH=""
 TAG_APP_FINAL_PATH=""
 TAG_APP_STAGING_PATH=""
 if [[ -n "$DERIVED_DATA" ]]; then
-  BUILD_PRODUCTS_DEBUG_DIR="${DERIVED_DATA}/Build/Products/Debug"
+  BUILD_PRODUCTS_DIR="${DERIVED_DATA}/Build/Products/${CONFIGURATION}"
   if [[ -n "$TAG" ]]; then
     XCODEBUILD_SOURCE_APP_NAME="$BASE_APP_NAME"
   fi
-  XCODEBUILD_SOURCE_APP_PATH="${BUILD_PRODUCTS_DEBUG_DIR}/${XCODEBUILD_SOURCE_APP_NAME}.app"
+  XCODEBUILD_SOURCE_APP_PATH="${BUILD_PRODUCTS_DIR}/${XCODEBUILD_SOURCE_APP_NAME}.app"
   if [[ -n "$TAG" && "$APP_NAME" != "$XCODEBUILD_SOURCE_APP_NAME" ]]; then
-    XCODEBUILD_TAG_APP_PATH="${BUILD_PRODUCTS_DEBUG_DIR}/${APP_NAME}.app"
+    XCODEBUILD_TAG_APP_PATH="${BUILD_PRODUCTS_DIR}/${APP_NAME}.app"
   fi
 fi
 
@@ -1360,7 +1374,7 @@ fi
 XCODEBUILD_ARGS=(
   -project cmux.xcodeproj
   -scheme cmux
-  -configuration Debug
+  -configuration "$CONFIGURATION"
   -destination 'platform=macOS'
 )
 if [[ -n "$DERIVED_DATA" ]]; then
@@ -1410,8 +1424,8 @@ else
 fi
 XCODEBUILD_ARGS+=(build)
 
-if [[ -n "$BUILD_PRODUCTS_DEBUG_DIR" ]]; then
-  mkdir -p "$BUILD_PRODUCTS_DEBUG_DIR"
+if [[ -n "$BUILD_PRODUCTS_DIR" ]]; then
+  mkdir -p "$BUILD_PRODUCTS_DIR"
   cleanup_incomplete_xcodebuild_outputs
   XCODEBUILD_CLEANED_OUTPUTS=0
 fi
@@ -1584,14 +1598,14 @@ if [[ -n "$TAG" ]]; then
   APP_EXECUTABLE_NAME="$BASE_APP_NAME"
 fi
 if [[ -n "$DERIVED_DATA" ]]; then
-  APP_PATH="${DERIVED_DATA}/Build/Products/Debug/${SEARCH_APP_NAME}.app"
+  APP_PATH="${DERIVED_DATA}/Build/Products/${CONFIGURATION}/${SEARCH_APP_NAME}.app"
   if [[ ! -d "${APP_PATH}" && "$SEARCH_APP_NAME" != "$FALLBACK_APP_NAME" ]]; then
-    APP_PATH="${DERIVED_DATA}/Build/Products/Debug/${FALLBACK_APP_NAME}.app"
+    APP_PATH="${DERIVED_DATA}/Build/Products/${CONFIGURATION}/${FALLBACK_APP_NAME}.app"
     APP_EXECUTABLE_NAME="$FALLBACK_APP_NAME"
   fi
 else
   APP_BINARY="$(
-    find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Debug/${SEARCH_APP_NAME}.app/Contents/MacOS/${SEARCH_APP_NAME}" -print0 \
+    find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/${CONFIGURATION}/${SEARCH_APP_NAME}.app/Contents/MacOS/${SEARCH_APP_NAME}" -print0 \
     | xargs -0 /usr/bin/stat -f "%m %N" 2>/dev/null \
     | sort -nr \
     | head -n 1 \
@@ -1602,7 +1616,7 @@ else
   fi
   if [[ -z "${APP_PATH}" && "$SEARCH_APP_NAME" != "$FALLBACK_APP_NAME" ]]; then
     APP_BINARY="$(
-      find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Debug/${FALLBACK_APP_NAME}.app/Contents/MacOS/${FALLBACK_APP_NAME}" -print0 \
+      find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/${CONFIGURATION}/${FALLBACK_APP_NAME}.app/Contents/MacOS/${FALLBACK_APP_NAME}" -print0 \
       | xargs -0 /usr/bin/stat -f "%m %N" 2>/dev/null \
       | sort -nr \
       | head -n 1 \
@@ -1699,6 +1713,7 @@ CLI_PATH="$(dirname "$APP_PATH")/cmux"
 # Build cmuxd and ensure helper binaries are present (needed for both launch and no-launch).
 CMUXD_SRC="$PWD/cmuxd/zig-out/bin/cmuxd"
 if [[ -d "$PWD/cmuxd" ]]; then
+  zig_darwin_sdk_setup
   (cd "$PWD/cmuxd" && zig build -Doptimize=ReleaseFast)
 fi
 if [[ -d "$PWD/ghostty" ]]; then

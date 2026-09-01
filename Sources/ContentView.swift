@@ -13866,6 +13866,17 @@ struct VerticalTabsSidebar: View, Equatable {
                 isBonsplitWorkspaceDropTargetCollectionActive = isActive
             },
             isWorkspaceDropTargetCollectionActive: isBonsplitWorkspaceDropTargetCollectionActive,
+            setHoveredWorkspaceDropTarget: { workspaceId in
+                guard dragState.bonsplitTabDropHoverWorkspaceId != workspaceId else { return }
+                dragState.bonsplitTabDropHoverWorkspaceId = workspaceId
+            },
+            springLoadRevealWorkspace: { workspaceId in
+                guard tabManager.selectedTabId != workspaceId,
+                      tabManager.tabs.contains(where: { $0.id == workspaceId }) else { return }
+                tabManager.focusTab(workspaceId)
+                selectedTabIds = [workspaceId]
+                lastSidebarSelectionIndex = tabManager.tabs.firstIndex { $0.id == workspaceId }
+            },
             targetBridge: bonsplitWorkspaceDropTargetBridge
         )
     }

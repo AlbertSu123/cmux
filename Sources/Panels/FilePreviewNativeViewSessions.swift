@@ -13,7 +13,7 @@ final class FilePreviewNativeViewSessions {
 
     func closeInactive(except mode: FilePreviewMode) {
         switch mode {
-        case .text:
+        case .text, .csv:
             closeAll()
         case .pdf:
             image.close()

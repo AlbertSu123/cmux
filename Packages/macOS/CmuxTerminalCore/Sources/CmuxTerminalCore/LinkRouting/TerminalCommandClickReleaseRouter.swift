@@ -44,6 +44,14 @@ public struct TerminalCommandClickReleaseRouter: Sendable {
             // Preserve the legacy pointer-snapshot exception for consumed
             // non-URL clicks. An explicit open-URL action is handled below and
             // never reaches local path resolution.
+            //
+            // A path cmux would open itself also survives consumption: the
+            // runtime consumes every click while the foreground program has
+            // mouse reporting on — an agent's option menu, say — and that says
+            // the program wanted the click, not that anything was opened.
+            // Without this, cmd-click does nothing in the panes that print
+            // filenames most.
+            if resolution.opensInCmux { return .pathFallback(resolution) }
             return resolution.source == .snapshot ? .pathFallback(resolution) : .none
         case .openURL:
             return .runtimeOpenURL

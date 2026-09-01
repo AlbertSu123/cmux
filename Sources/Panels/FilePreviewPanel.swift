@@ -917,6 +917,7 @@ final class FilePreviewDragPasteboardWriter: NSPasteboardItem {
 
 enum FilePreviewMode: Equatable {
     case text
+    case csv
     case pdf
     case image
     case media
@@ -984,6 +985,8 @@ enum FilePreviewKindResolver {
         switch mode {
         case .text:
             return "doc.text"
+        case .csv:
+            return "tablecells"
         case .pdf:
             return "doc.richtext"
         case .image:
@@ -997,6 +1000,9 @@ enum FilePreviewKindResolver {
 
     private static func initialResolution(for url: URL) -> Resolution {
         let ext = url.pathExtension.lowercased()
+        if ext == "csv" || ext == "tsv" {
+            return .resolved(.csv)
+        }
         if let textResolution = knownTextResolutionBeforeMedia(for: url, sniffMediaCollisions: false) {
             return textResolution
         }
@@ -1019,6 +1025,9 @@ enum FilePreviewKindResolver {
 
     private static func resolvedResolution(for url: URL) -> Resolution {
         let ext = url.pathExtension.lowercased()
+        if ext == "csv" || ext == "tsv" {
+            return .resolved(.csv)
+        }
         if ext == "plist", looksLikeBinaryPropertyList(url: url) {
             return .resolved(.quickLook)
         }
@@ -1262,6 +1271,22 @@ final class FilePreviewPanel: Panel, ObservableObject, FilePreviewTextEditingPan
     @Published private(set) var focusFlashToken = 0
     @Published private(set) var previewMode: FilePreviewMode
     let previewRevisionState = FilePreviewRevision()
+    /// ⌘F arrives through the app's shortcut router rather than the grid's own
+    /// key handling, so the request lands here and the grid acts on it. The
+    /// query and the match list stay in the grid — only the intent crosses.
+    @Published private(set) var csvFindSignal: FilePreviewCSVFindSignal?
+    /// Set by the grid so the router can answer honestly whether ⌘G had a find
+    /// bar to step. Deliberately not `@Published`: nothing renders from it, and
+    /// publishing it would re-render the grid on open and close.
+    var csvFindIsPresented = false
+    private var csvFindToken = 0
+    /// Bumped by the header's copy button. The grid owns the column order, the
+    /// sort and the checked rows, so it performs the copy; only the intent
+    /// crosses, exactly as it does for find.
+    @Published private(set) var csvCopyToken = 0
+    /// Drives the header button's checkmark once a copy lands.
+    @Published private(set) var csvCopyDidConfirm = false
+    private var csvCopyConfirmationTask: Task<Void, Never>?
 
     let nativeViewSessions = FilePreviewNativeViewSessions()
 
@@ -1328,6 +1353,44 @@ final class FilePreviewPanel: Panel, ObservableObject, FilePreviewTextEditingPan
         if startFileWatcher {
             startWatchingForFileChanges()
         }
+    }
+
+    /// Opens the grid's find bar, or re-focuses it when it is already up.
+    @discardableResult
+    func requestCSVFind() -> Bool {
+        guard previewMode == .csv else { return false }
+        signalCSVFind(.open)
+        return true
+    }
+
+    /// Steps to the next or previous match. Returns false when there is no find
+    /// bar to step, so ⌘G falls through to whatever else wants it.
+    @discardableResult
+    func requestCSVFindStep(_ intent: FilePreviewCSVFindIntent) -> Bool {
+        guard previewMode == .csv, csvFindIsPresented else { return false }
+        signalCSVFind(intent)
+        return true
+    }
+
+    func requestCSVCopy() {
+        guard previewMode == .csv else { return }
+        csvCopyToken += 1
+    }
+
+    /// Called by the grid once the sheet is on the pasteboard.
+    func confirmCSVCopy() {
+        csvCopyDidConfirm = true
+        csvCopyConfirmationTask?.cancel()
+        csvCopyConfirmationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            self?.csvCopyDidConfirm = false
+        }
+    }
+
+    private func signalCSVFind(_ intent: FilePreviewCSVFindIntent) {
+        csvFindToken += 1
+        csvFindSignal = FilePreviewCSVFindSignal(intent: intent, token: csvFindToken)
     }
 
     func focus() {
@@ -1631,6 +1694,8 @@ final class FilePreviewPanel: Panel, ObservableObject, FilePreviewTextEditingPan
         switch mode {
         case .text:
             return .textEditor
+        case .csv:
+            return .quickLook
         case .pdf:
             return .pdfCanvas
         case .image:
@@ -1713,6 +1778,17 @@ struct FilePreviewPanelView: View {
                 label: String(localized: "filePreview.refresh", defaultValue: "Refresh"),
                 action: { panel.reloadFromDisk() }
             )
+            if panel.previewMode == .csv {
+                PanelHeaderIconButton(
+                    systemName: panel.csvCopyDidConfirm ? "checkmark" : "doc.on.doc",
+                    label: String(
+                        localized: "filePreview.csv.copy",
+                        defaultValue: "Copy CSV"
+                    ),
+                    isDisabled: panel.isFileUnavailable,
+                    action: { panel.requestCSVCopy() }
+                )
+            }
 
             FileExternalOpenMenu(fileURL: panel.fileURL, isDisabled: panel.isFileUnavailable)
         }
@@ -1732,6 +1808,13 @@ struct FilePreviewPanelView: View {
                     themeForegroundColor: themeForegroundColor,
                     drawsBackground: appearance.drawsContentBackground,
                     wordWrap: fileEditorWordWrap
+                )
+            case .csv:
+                FilePreviewCSVView(
+                    panel: panel,
+                    isVisibleInUI: isVisibleInUI,
+                    backgroundColor: contentBackgroundColor,
+                    foregroundColor: themeForegroundColor
                 )
             case .pdf:
                 FilePreviewPDFView(
@@ -4745,5 +4828,1864 @@ private final class FilePreviewPointerObserverView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
+    }
+}
+
+// MARK: - CSV preview
+
+private struct CSVPreviewDocument {
+    struct Row: Identifiable {
+        let id: Int
+        var cells: [String]
+    }
+
+    var header: [String]
+    var rows: [Row]
+    let columnWidths: [CGFloat]
+    let truncated: Bool
+    var delimiter: Character = ","
+
+    /// Editing is refused on a truncated load: the in-memory table holds only
+    /// the first `maxRows` records (50k), so writing it back would silently
+    /// delete every row past the cap.
+    var isEditable: Bool { !truncated }
+
+    mutating func setCell(rowID: Int, column: Int, to value: String) {
+        guard let index = rows.firstIndex(where: { $0.id == rowID }) else { return }
+        var cells = rows[index].cells
+        if cells.count <= column {
+            cells.append(contentsOf: Array(repeating: "", count: column - cells.count + 1))
+        }
+        cells[column] = value
+        rows[index].cells = cells
+    }
+
+    mutating func deleteRow(id: Int) {
+        rows.removeAll { $0.id == id }
+    }
+
+    /// Removes a column from the header and every row, handing back what it
+    /// held so the deletion can be undone.
+    mutating func deleteColumn(at index: Int) -> (name: String, values: [String])? {
+        guard header.indices.contains(index) else { return nil }
+        let name = header.remove(at: index)
+        var values: [String] = []
+        values.reserveCapacity(rows.count)
+        for rowIndex in rows.indices {
+            if index < rows[rowIndex].cells.count {
+                values.append(rows[rowIndex].cells.remove(at: index))
+            } else {
+                // Short rows are legal in a CSV; they simply had nothing here.
+                values.append("")
+            }
+        }
+        return (name, values)
+    }
+
+    mutating func insertColumn(name: String, values: [String], at index: Int) {
+        let target = min(max(index, 0), header.count)
+        header.insert(name, at: target)
+        for rowIndex in rows.indices {
+            let value = rowIndex < values.count ? values[rowIndex] : ""
+            if target <= rows[rowIndex].cells.count {
+                rows[rowIndex].cells.insert(value, at: target)
+            } else {
+                rows[rowIndex].cells.append(value)
+            }
+        }
+    }
+
+    mutating func insertRow(_ row: Row, at index: Int) {
+        rows.insert(row, at: min(max(index, 0), rows.count))
+    }
+
+    /// Apply a history entry and return the entry that reverses it, so undo and
+    /// redo share one implementation instead of drifting apart.
+    mutating func apply(
+        _ entry: FilePreviewCSVUndoStack<Row>.Entry
+    ) -> FilePreviewCSVUndoStack<Row>.Entry? {
+        switch entry {
+        case let .setCell(rowID, column, previous):
+            guard rows.contains(where: { $0.id == rowID }) else { return nil }
+            let current = cell(rowID: rowID, column: column)
+            setCell(rowID: rowID, column: column, to: previous)
+            return .setCell(rowID: rowID, column: column, previous: current)
+        case let .insertRow(index, row):
+            insertRow(row, at: index)
+            return .removeRow(rowID: row.id)
+        case let .removeRow(rowID):
+            guard let index = rows.firstIndex(where: { $0.id == rowID }) else { return nil }
+            let row = rows[index]
+            deleteRow(id: rowID)
+            return .insertRow(index: index, row: row)
+        case let .insertColumn(index, name, values):
+            insertColumn(name: name, values: values, at: index)
+            return .removeColumn(index: index)
+        case let .removeColumn(index):
+            guard let removed = deleteColumn(at: index) else { return nil }
+            return .insertColumn(index: index, name: removed.name, values: removed.values)
+        }
+    }
+
+    func cell(rowID: Int, column: Int) -> String {
+        guard let row = rows.first(where: { $0.id == rowID }),
+              column < row.cells.count else { return "" }
+        return row.cells[column]
+    }
+
+    func save(to url: URL) throws {
+        try FilePreviewCSVSerializer.write(
+            header: header,
+            rows: rows.map(\.cells),
+            delimiter: delimiter,
+            to: url
+        )
+    }
+
+    static func load(url: URL) -> CSVPreviewDocument? {
+        // 50k rows covers every table we expect to edit in place; the byte cap
+        // rises with it so a wide 50k-row export is not rejected before the row
+        // cap can apply.
+        let maxBytes = 250_000_000
+        let maxRows = 50_000
+        guard let data = try? Data(contentsOf: url), data.count <= maxBytes else { return nil }
+        guard let text = String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1) else { return nil }
+        let delimiter: Character = url.pathExtension.lowercased() == "tsv" ? "\t" : ","
+        let (records, truncated) = parse(text, delimiter: delimiter, maxRecords: maxRows + 1)
+        guard let first = records.first, records.count > 1 || first.count > 1 else { return nil }
+        let rows = records.dropFirst().enumerated().map { Row(id: $0.offset, cells: $0.element) }
+        let columnCount = max(first.count, rows.prefix(200).map(\.cells.count).max() ?? 0)
+        guard columnCount > 0 else { return nil }
+        var widths: [CGFloat] = []
+        widths.reserveCapacity(columnCount)
+        for column in 0..<columnCount {
+            var longest = column < first.count ? first[column].count : 0
+            for row in rows.prefix(200) where column < row.cells.count {
+                longest = max(longest, row.cells[column].count)
+            }
+            widths.append(min(max(CGFloat(longest) * 7.2 + 18, 56), 420))
+        }
+        return CSVPreviewDocument(
+            header: first,
+            rows: rows,
+            columnWidths: widths,
+            truncated: truncated,
+            delimiter: delimiter
+        )
+    }
+
+    private static func parse(
+        _ text: String,
+        delimiter: Character,
+        maxRecords: Int
+    ) -> ([[String]], Bool) {
+        var records: [[String]] = []
+        var record: [String] = []
+        var field = ""
+        var inQuotes = false
+        var index = text.startIndex
+        let end = text.endIndex
+
+        func endField() {
+            record.append(field)
+            field = ""
+        }
+
+        func endRecord() -> Bool {
+            endField()
+            if !(record.count == 1 && record[0].isEmpty) {
+                records.append(record)
+            }
+            record = []
+            return records.count >= maxRecords
+        }
+
+        while index < end {
+            let character = text[index]
+            if inQuotes {
+                if character == "\"" {
+                    let next = text.index(after: index)
+                    if next < end, text[next] == "\"" {
+                        field.append("\"")
+                        index = text.index(after: next)
+                        continue
+                    }
+                    inQuotes = false
+                } else {
+                    field.append(character)
+                }
+            } else if character == "\"", field.isEmpty {
+                inQuotes = true
+            } else if character == delimiter {
+                endField()
+            } else if character == "\n" || character == "\r\n" {
+                if endRecord() { return (records, true) }
+            } else if character == "\r" {
+                let next = text.index(after: index)
+                if next < end, text[next] == "\n" {
+                    index = next
+                }
+                if endRecord() { return (records, true) }
+            } else {
+                field.append(character)
+            }
+            index = text.index(after: index)
+        }
+        if !field.isEmpty || !record.isEmpty {
+            _ = endRecord()
+        }
+        return (records, false)
+    }
+}
+
+/// Sort keys for the CSV grid, highest priority first.
+///
+/// A newly sorted column is appended as the next tiebreaker rather than
+/// becoming the primary key. Sorting by region and then by company groups the
+/// sheet by region and orders company inside each region, which is what sorting
+/// "within what I already sorted" means; the opposite convention, where the
+/// latest click wins, would throw the region grouping away.
+struct FilePreviewCSVSort: Equatable, Hashable {
+    enum Direction: Equatable, Hashable {
+        case ascending
+        case descending
+
+        var reversed: Direction { self == .ascending ? .descending : .ascending }
+    }
+
+    struct Key: Equatable, Hashable {
+        let column: Int
+        var direction: Direction
+    }
+
+    private(set) var keys: [Key] = []
+
+    var isEmpty: Bool { keys.isEmpty }
+
+    /// 1-based position in the chain, shown in the header so the precedence of
+    /// several active sorts is readable.
+    func rank(ofColumn column: Int) -> Int? {
+        keys.firstIndex(where: { $0.column == column }).map { $0 + 1 }
+    }
+
+    func direction(ofColumn column: Int) -> Direction? {
+        keys.first(where: { $0.column == column })?.direction
+    }
+
+    /// Ascending, then descending, then out of the chain. Toggling keeps the
+    /// column's existing precedence: reversing a tiebreaker must not promote it
+    /// over the keys it breaks ties for.
+    mutating func cycle(column: Int) {
+        guard let index = keys.firstIndex(where: { $0.column == column }) else {
+            keys.append(Key(column: column, direction: .ascending))
+            return
+        }
+        if keys[index].direction == .ascending {
+            keys[index].direction = .descending
+        } else {
+            keys.remove(at: index)
+        }
+    }
+
+    mutating func set(column: Int, to direction: Direction) {
+        if let index = keys.firstIndex(where: { $0.column == column }) {
+            keys[index].direction = direction
+        } else {
+            keys.append(Key(column: column, direction: direction))
+        }
+    }
+
+    mutating func remove(column: Int) {
+        keys.removeAll { $0.column == column }
+    }
+
+    /// Drops any key on `column` and renumbers the rest, so a sort keeps
+    /// pointing at the columns it was sorting after one is deleted.
+    mutating func columnRemoved(_ column: Int) {
+        keys.removeAll { $0.column == column }
+        keys = keys.map { key in
+            Key(column: key.column > column ? key.column - 1 : key.column, direction: key.direction)
+        }
+    }
+
+    mutating func clear() {
+        keys.removeAll()
+    }
+}
+
+/// Display ordering for the CSV grid.
+enum FilePreviewCSVRowOrder {
+    /// One cell's place in a sort. Numbers order numerically and ahead of text,
+    /// so a numeric column sorts 2 before 10 rather than "10" before "2".
+    enum Value: Comparable {
+        case empty
+        case number(Double)
+        case text(String)
+
+        static func < (lhs: Value, rhs: Value) -> Bool {
+            switch (lhs, rhs) {
+            case (.empty, .empty): return false
+            case (.empty, _): return true
+            case (_, .empty): return false
+            case let (.number(a), .number(b)): return a < b
+            case (.number, .text): return true
+            case (.text, .number): return false
+            case let (.text(a), .text(b)): return a < b
+            }
+        }
+
+        /// Text is folded once, at decoration time, so comparisons are plain
+        /// string comparisons. A locale-aware compare per comparison would run
+        /// hundreds of thousands of times on a large sheet.
+        static func of(_ text: String) -> Value {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return .empty }
+            if let number = Double(trimmed) { return .number(number) }
+            return .text(trimmed.folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: nil
+            ))
+        }
+    }
+
+    /// Row indices in display order.
+    ///
+    /// Decorate-sort-undecorate: the comparison values are built once per
+    /// sorted column rather than per comparison. Ties fall back to the original
+    /// index so the order is total and the sort is stable — rows the keys
+    /// cannot separate stay in file order instead of shuffling on every resort.
+    static func displayIndices(cells: [[String]], sort: FilePreviewCSVSort) -> [Int] {
+        let indices = Array(cells.indices)
+        guard !sort.keys.isEmpty else { return indices }
+
+        let decorated: [[Value]] = sort.keys.map { key in
+            cells.map { row in
+                key.column < row.count ? Value.of(row[key.column]) : .empty
+            }
+        }
+
+        return indices.sorted { lhs, rhs in
+            for (position, key) in sort.keys.enumerated() {
+                let left = decorated[position][lhs]
+                let right = decorated[position][rhs]
+                if left == right { continue }
+                let ascending = left < right
+                return key.direction == .ascending ? ascending : !ascending
+            }
+            return lhs < rhs
+        }
+    }
+}
+
+/// Hands back the `NSScrollView` backing the SwiftUI `ScrollView` it is placed in.
+///
+/// SwiftUI cannot scroll a single axis before macOS 15, and `scrollTo` moves
+/// both: aiming it at a header cell would drag a long sheet back to the top,
+/// because a pinned header's *layout* position is the top of the content no
+/// matter where it is drawn. Reaching the scroll view keeps the reveal
+/// horizontal and leaves the row the user is looking at where it is.
+private struct ScrollViewBridge: NSViewRepresentable {
+    let onResolve: (NSScrollView?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let probe = NSView(frame: .zero)
+        DispatchQueue.main.async { onResolve(probe.enclosingScrollView) }
+        return probe
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {}
+}
+
+/// Holds the resolved scroll view without republishing the grid: the reference
+/// is plumbing for scrolling, and nothing renders from it.
+private final class ScrollViewHandle {
+    weak var scrollView: NSScrollView?
+}
+
+/// Paints a find hit. Every match is tinted and the current one is outlined, so
+/// stepping through results stays legible without moving the row selection.
+private struct CSVMatchHighlight: ViewModifier {
+    let isMatch: Bool
+    let isCurrent: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background(isMatch ? Color.yellow.opacity(isCurrent ? 0.45 : 0.25) : Color.clear)
+            .overlay {
+                if isCurrent {
+                    Rectangle().strokeBorder(Color.accentColor, lineWidth: 2)
+                }
+            }
+    }
+}
+
+/// Find-in-sheet state for the CSV grid.
+///
+/// A value type for the same reason the column layout is: rows render inside a
+/// `LazyVStack`, and the snapshot-boundary rule forbids anything below that
+/// boundary from holding a reference to an observable store.
+struct FilePreviewCSVSearch: Equatable {
+    struct Match: Hashable {
+        let rowID: Int
+        let column: Int
+    }
+
+    var query: String = ""
+    /// Matches in document order, which is the order the arrows step through.
+    private(set) var matches: [Match] = []
+    /// The same matches keyed for lookup. Every visible cell asks whether it is
+    /// a match on each render, so that question has to be O(1); paying for the
+    /// second copy is cheaper than scanning the list per cell.
+    private(set) var matchSet: Set<Match> = []
+    private(set) var currentIndex: Int?
+
+    var currentMatch: Match? {
+        guard let currentIndex, matches.indices.contains(currentIndex) else { return nil }
+        return matches[currentIndex]
+    }
+
+    mutating func apply(_ found: [Match]) {
+        matches = found
+        matchSet = Set(found)
+        currentIndex = found.isEmpty ? nil : 0
+    }
+
+    mutating func clear() {
+        query = ""
+        apply([])
+    }
+
+    /// Step the selection, wrapping at both ends the way a find bar does.
+    mutating func step(by offset: Int) {
+        guard !matches.isEmpty else {
+            currentIndex = nil
+            return
+        }
+        let from = currentIndex ?? 0
+        let count = matches.count
+        currentIndex = ((from + offset) % count + count) % count
+    }
+
+    func isMatch(rowID: Int, column: Int) -> Bool {
+        matchSet.contains(Match(rowID: rowID, column: column))
+    }
+
+    func isCurrent(rowID: Int, column: Int) -> Bool {
+        currentMatch == Match(rowID: rowID, column: column)
+    }
+
+    /// Case- and diacritic-insensitive substring scan, in document order.
+    ///
+    /// Takes plain arrays rather than the document so it can run off the main
+    /// actor without the document type having to be `Sendable`.
+    static func matches(for query: String, rowIDs: [Int], cells: [[String]]) -> [Match] {
+        guard !query.isEmpty else { return [] }
+        var found: [Match] = []
+        for (index, row) in cells.enumerated() where rowIDs.indices.contains(index) {
+            let rowID = rowIDs[index]
+            for (column, text) in row.enumerated() where text.localizedStandardContains(query) {
+                found.append(Match(rowID: rowID, column: column))
+            }
+        }
+        return found
+    }
+}
+
+/// What the app's find shortcuts are asking the CSV grid to do.
+enum FilePreviewCSVFindIntent: Equatable {
+    case open
+    case next
+    case previous
+}
+
+/// One find request. The token distinguishes repeats, since pressing ⌘F twice
+/// carries the same intent and must still re-focus the field.
+struct FilePreviewCSVFindSignal: Equatable {
+    let intent: FilePreviewCSVFindIntent
+    let token: Int
+}
+
+/// Pushes `cursor` for as long as `isActive`, popping exactly once per push.
+///
+/// The cursor stack is process-wide, so an unbalanced `NSCursor.pop()` corrupts
+/// it for the whole app. That is easy to trigger in the CSV grid, where a lazy
+/// row can be scrolled out from under the pointer before its hover ever ends,
+/// which is why the pop is also driven off `onDisappear`.
+private struct CursorPush: ViewModifier {
+    let cursor: NSCursor
+    let isActive: Bool
+
+    @State private var didPush = false
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { apply(isActive) }
+            .onChange(of: isActive) { _, active in apply(active) }
+            .onDisappear { apply(false) }
+    }
+
+    private func apply(_ shouldPush: Bool) {
+        guard shouldPush != didPush else { return }
+        didPush = shouldPush
+        if shouldPush {
+            cursor.push()
+        } else {
+            NSCursor.pop()
+        }
+    }
+}
+
+/// `CursorPush` for the common case where hover alone decides.
+private struct HoverCursor: ViewModifier {
+    let cursor: NSCursor
+
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isHovering = $0 }
+            .modifier(CursorPush(cursor: cursor, isActive: isHovering))
+    }
+}
+
+/// Grab strip on a header cell's trailing edge.
+///
+/// The drag is previewed with a guide line and only committed on release. The
+/// grid below is a `LazyVStack` of up to 50k rows with a pinned header, and
+/// writing a width on every mouse event re-runs that whole lazy layout — the
+/// header un-pins and the visible rows are torn down and rebuilt, which reads
+/// as the grid flickering. Deferring the commit means the grid lays out twice
+/// per resize instead of once per event, so there is nothing left to flicker.
+///
+/// The resize cursor is held for the whole drag, not just while hovering: the
+/// pointer leaves the grip the moment the drag starts, since the grip no longer
+/// follows it.
+private struct ColumnResizeHandle: View {
+    let width: () -> CGFloat
+    let onBegin: () -> Void
+    let onCommit: (CGFloat) -> Void
+
+    @State private var isHovering = false
+    /// Screen x the drag started at, and the width the column had then. See the
+    /// gesture below for why the anchor is kept in screen space.
+    @State private var dragAnchorX: CGFloat?
+    @State private var dragBaseWidth: CGFloat?
+    /// Width the drag currently proposes. Held here rather than in the grid's
+    /// layout so a drag update invalidates this handle alone.
+    @State private var proposedWidth: CGFloat?
+
+    /// Visible width of the drawn grip line.
+    private static let lineWidth: CGFloat = 2
+    /// Hit area, wider than the line so the grip is easy to catch.
+    private static let hitWidth: CGFloat = 14
+    /// The guide is clipped by the grid's scroll viewport, so it only has to
+    /// out-measure any viewport the grid can be given.
+    private static let guideHeight: CGFloat = 4000
+
+    private var isDragging: Bool { dragAnchorX != nil }
+
+    var body: some View {
+        // A drawn grip rather than an invisible strip: the handle needs to be
+        // findable before it can be grabbed.
+        Rectangle()
+            .fill(gripColor)
+            .frame(width: Self.lineWidth)
+            .frame(width: Self.hitWidth)
+            .contentShape(Rectangle())
+            .overlay(alignment: .top) { guide }
+            .onHover { isHovering = $0 }
+            .modifier(CursorPush(cursor: .resizeLeftRight, isActive: isHovering || isDragging))
+            // High priority so grabbing the grip resizes instead of starting the
+            // parent header cell's reorder drag.
+            //
+            // The drag is measured against the screen rather than against
+            // `value.translation`, because this grip rides the trailing edge of
+            // the very column it resizes: `DragGesture` subtracts a start
+            // location captured once in the grip's own space, so widening the
+            // column by `t` moves the grip right by `t` and the next event
+            // reports `D - t` instead of `D`. That is a unity-gain feedback
+            // loop — the width alternates between `base` and `base + D` on
+            // consecutive frames, which is a shake. Screen coordinates cannot
+            // move with the value being dragged, so the loop cannot form.
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { _ in
+                        let mouseX = NSEvent.mouseLocation.x
+                        guard let anchor = dragAnchorX, let base = dragBaseWidth else {
+                            dragAnchorX = mouseX
+                            dragBaseWidth = width()
+                            proposedWidth = width()
+                            onBegin()
+                            return
+                        }
+                        // Moves the guide only — the column keeps its width
+                        // until the drag ends.
+                        proposedWidth = FilePreviewCSVColumnLayout.clamped(base + (mouseX - anchor))
+                    }
+                    .onEnded { _ in
+                        let committed = proposedWidth ?? width()
+                        dragAnchorX = nil
+                        dragBaseWidth = nil
+                        proposedWidth = nil
+                        onCommit(committed)
+                    }
+            )
+    }
+
+    /// The guide marks where the trailing edge will land, so it is offset by
+    /// the width the drag proposes rather than by the raw pointer delta: past
+    /// the clamp the pointer keeps moving and the edge does not.
+    @ViewBuilder
+    private var guide: some View {
+        if let dragBaseWidth, let proposedWidth {
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: Self.lineWidth, height: Self.guideHeight)
+                .offset(x: proposedWidth - dragBaseWidth)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var gripColor: Color {
+        isHovering || isDragging ? Color.accentColor : Color.secondary.opacity(0.35)
+    }
+}
+
+private struct FilePreviewCSVView: View {
+    @ObservedObject var panel: FilePreviewPanel
+    let isVisibleInUI: Bool
+    let backgroundColor: NSColor
+    let foregroundColor: NSColor
+
+    private struct EditingCell: Equatable {
+        let rowID: Int
+        let column: Int
+    }
+
+    private struct ColumnDrag: Equatable {
+        let displayIndex: Int
+        var translation: CGFloat
+    }
+
+    @State private var document: CSVPreviewDocument?
+    @State private var loadFailed = false
+    @State private var layout = FilePreviewCSVColumnLayout(widths: [])
+    /// Column whose edge is being dragged, if any. The in-flight width lives in
+    /// the handle, not here, so a drag does not re-lay out the grid.
+    @State private var resizingColumn: Int?
+    @State private var columnDrag: ColumnDrag?
+    @State private var selectedRowID: Int?
+    @State private var selectedColumn: Int?
+    @State private var checkedRowIDs: Set<Int> = []
+    /// Anchor for shift-click range selection: the last row checked without
+    /// shift held.
+    @State private var checkAnchorRowID: Int?
+    @State private var editingCell: EditingCell?
+    @State private var editText: String = ""
+    @State private var saveError: String?
+    @State private var undoStack = FilePreviewCSVUndoStack<CSVPreviewDocument.Row>()
+    @State private var redoStack = FilePreviewCSVUndoStack<CSVPreviewDocument.Row>()
+    @State private var hasUnsavedEdits = false
+    @State private var saveTask: Task<Void, Never>?
+    @State private var search = FilePreviewCSVSearch()
+    @State private var scrollHandle = ScrollViewHandle()
+    @State private var sort = FilePreviewCSVSort()
+    /// Modification date of the last write this view made. A watch event whose
+    /// mtime matches it is our own save echoing back, not somebody else's edit.
+    @State private var lastSelfWriteDate: Date?
+    /// Bumped on every load so derived work keyed on it — the find scan — reruns
+    /// against the new rows instead of holding matches for rows that are gone.
+    @State private var documentVersion = 0
+    /// The file changed underneath edits that have not been written yet.
+    @State private var externalChangeBlocked = false
+    /// Rows in the order they are shown. Sorting is a view over the document:
+    /// the document keeps file order, so clicking a header never rewrites the
+    /// user's file on the next autosave.
+    @State private var displayRows: [CSVPreviewDocument.Row] = []
+    @State private var isFindPresented = false
+    @FocusState private var findFieldFocused: Bool
+    @Environment(\.controlActiveState) private var controlActiveState
+    @FocusState private var editorFocused: Bool
+    @FocusState private var gridFocused: Bool
+
+    var body: some View {
+        Group {
+            if let document {
+                grid(for: document)
+            } else if loadFailed {
+                failureView
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(Color(nsColor: backgroundColor))
+        .onChange(of: panel.filePath) { oldPath, _ in
+            // Write the outgoing file, not the incoming one.
+            flushSave(to: oldPath)
+        }
+        .onChange(of: controlActiveState) { _, state in
+            // Panel lost key focus — the user has moved on, so write now.
+            if state != .key { flushSave() }
+        }
+        .onDisappear {
+            flushSave()
+            panel.csvFindIsPresented = false
+        }
+        .onChange(of: panel.csvFindSignal) { _, signal in
+            guard let signal else { return }
+            handleFindSignal(signal)
+        }
+        .onChange(of: sort) { _, _ in rebuildDisplayRows(from: document) }
+        .onChange(of: panel.csvCopyToken) { _, _ in
+            guard let document else { return }
+            copyDisplayedCSV(document)
+        }
+        .task(id: SearchScan(query: search.query, sort: sort, version: documentVersion)) {
+            await recomputeMatches()
+        }
+        .task(id: panel.filePath) { await watchFileForChanges(path: panel.filePath) }
+        .task(id: panel.filePath) {
+            let url = URL(fileURLWithPath: panel.filePath)
+            let loaded = await Task.detached(priority: .userInitiated) {
+                CSVPreviewDocument.load(url: url)
+            }.value
+            document = loaded
+            loadFailed = loaded == nil
+            documentVersion += 1
+            externalChangeBlocked = false
+            // Baseline for the watcher: without it the event the watcher emits
+            // as it attaches reads as an external change and reloads at once.
+            lastSelfWriteDate = Self.modificationDate(of: url)
+            // A new file starts unsorted; carrying a previous file's sort keys
+            // over would order the new sheet by whatever columns happened to
+            // share an index.
+            sort.clear()
+            rebuildDisplayRows(from: loaded)
+            layout = FilePreviewCSVColumnLayout(widths: loaded?.columnWidths ?? [])
+            resizingColumn = nil
+            columnDrag = nil
+            selectedRowID = nil
+            selectedColumn = nil
+            checkedRowIDs = []
+            checkAnchorRowID = nil
+            editingCell = nil
+            saveError = nil
+            undoStack.removeAll()
+            redoStack.removeAll()
+            hasUnsavedEdits = false
+        }
+    }
+
+    private var failureView: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "tablecells.badge.ellipsis")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text(String(
+                localized: "filePreview.csv.unparseable",
+                defaultValue: "Couldn't display this file as a table"
+            ))
+            .font(.headline)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func grid(for document: CSVPreviewDocument) -> some View {
+        let totalWidth = layout.totalWidth + Self.selectGutterWidth
+        let gridLine = Color(nsColor: foregroundColor).opacity(0.08)
+        return VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section(header: headerRow(for: document, gridLine: gridLine)) {
+                            ForEach(displayRows) { row in
+                                cellRow(row, document: document)
+                                    .background(
+                                        row.id.isMultiple(of: 2)
+                                            ? Color.clear
+                                            : Color(nsColor: foregroundColor).opacity(0.035)
+                                    )
+                                    .overlay(alignment: .bottom) {
+                                        gridLine.frame(height: 1)
+                                    }
+                            }
+                        }
+                    }
+                    .frame(width: max(totalWidth, 1), alignment: .leading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(
+                        ScrollViewBridge { scrollHandle.scrollView = $0 }
+                            .frame(width: 0, height: 0)
+                    )
+                }
+                .overlay(alignment: .topTrailing) {
+                    if isFindPresented {
+                        findBar
+                            .padding(.top, 8)
+                            .padding(.trailing, 16)
+                    }
+                }
+                .onChange(of: search.currentIndex) { _, _ in
+                    guard let match = search.currentMatch else { return }
+                    proxy.scrollTo(match.rowID, anchor: .center)
+                    revealColumn(match.column, in: layout)
+                }
+            }
+            if document.truncated {
+                Text(String(
+                    localized: "filePreview.csv.truncatedReadOnly",
+                    defaultValue: "Showing the first \(document.rows.count) rows — editing is disabled so the rest of the file is not lost"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
+            if !checkedRowIDs.isEmpty {
+                HStack(spacing: 8) {
+                    Text(String(
+                        localized: "filePreview.csv.selectedCount",
+                        defaultValue: "\(checkedRowIDs.count) selected"
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Button(String(
+                        localized: "filePreview.csv.deleteSelected",
+                        defaultValue: "Delete Selected"
+                    )) {
+                        deleteCheckedOrSelectedRows()
+                    }
+                    .controlSize(.small)
+                    Button(String(
+                        localized: "filePreview.csv.clearSelection",
+                        defaultValue: "Clear"
+                    )) {
+                        checkedRowIDs = []
+                        checkAnchorRowID = nil
+                    }
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
+            if externalChangeBlocked {
+                Text(String(
+                    localized: "filePreview.csv.changedOnDisk",
+                    defaultValue: "This file changed on disk — saving your edits will overwrite that change"
+                ))
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
+            if hasUnsavedEdits && saveError == nil {
+                Text(String(
+                    localized: "filePreview.csv.unsaved",
+                    defaultValue: "Unsaved edits — saved when you click away"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
+            if let saveError {
+                Text(String(
+                    localized: "filePreview.csv.saveFailed",
+                    defaultValue: "Couldn't save: \(saveError)"
+                ))
+                .font(.caption)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+            }
+        }
+        .focusable()
+        .focused($gridFocused)
+        // Clicking anywhere in the grid must hand it keyboard focus, or none of
+        // the key bindings below ever fire: .focusable() only makes a view
+        // eligible for focus on macOS, it does not take focus on click.
+        .onTapGesture { gridFocused = true }
+        // One catch-all handler rather than per-key onKeyPress(keys:) bindings.
+        // Matching a KeyEquivalent for the delete key never fired here while
+        // the arrow bindings did, so the key is compared directly and anything
+        // unrecognised is returned as .ignored so typing still passes through.
+        .onKeyPress(phases: [.down, .repeat]) { keyPress in
+            handleKeyPress(keyPress)
+        }
+    }
+
+    /// Keyed on both the query and the sort: a resort changes match order, so
+    /// the scan has to rerun even when the query has not changed.
+    private struct SearchScan: Equatable, Hashable {
+        let query: String
+        let sort: FilePreviewCSVSort
+        let version: Int
+    }
+
+    /// Takes the document explicitly rather than reading `@State` that a caller
+    /// may have just written, which is not guaranteed to read back as the new
+    /// value inside the same closure.
+    private static func modificationDate(of url: URL) -> Date? {
+        try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+
+    /// Reloads the sheet whenever the file changes underneath it.
+    ///
+    /// `FileWatcher` handles inode reattachment and nearest-ancestor recovery,
+    /// which matters here because most tools rewrite a CSV by writing a temp
+    /// file and renaming it over the original — the path survives, the inode
+    /// does not. The throttle collapses the burst that one such save produces
+    /// into a single reload.
+    private func watchFileForChanges(path: String) async {
+        let watcher = FileWatcher(path: path, throttle: .milliseconds(250))
+        for await _ in watcher.events {
+            if Task.isCancelled { break }
+            // A different file is previewed now; this watcher is on its way out.
+            guard panel.filePath == path else { break }
+            await reloadFromDiskIfChanged(path: path)
+        }
+    }
+
+    private func reloadFromDiskIfChanged(path: String) async {
+        let url = URL(fileURLWithPath: path)
+        // Our own save, echoing back through the watcher. Reloading here would
+        // be pointless work at best, and at worst would fight the next edit.
+        if let modified = Self.modificationDate(of: url), modified == lastSelfWriteDate {
+            return
+        }
+        // Never take the user's work away: unwritten edits and an open cell
+        // editor both outrank a newer copy on disk. Say so instead.
+        guard !hasUnsavedEdits, editingCell == nil else {
+            externalChangeBlocked = true
+            return
+        }
+        let loaded = await Task.detached(priority: .userInitiated) {
+            CSVPreviewDocument.load(url: url)
+        }.value
+        guard !Task.isCancelled, panel.filePath == path, let loaded else { return }
+        applyReloadedDocument(loaded)
+    }
+
+    /// Swaps in a reloaded document while keeping as much of the view as still
+    /// makes sense. A row appended by another process should not cost the user
+    /// their column widths, ordering, sort, or selection.
+    private func applyReloadedDocument(_ loaded: CSVPreviewDocument) {
+        document = loaded
+        loadFailed = false
+        externalChangeBlocked = false
+        documentVersion += 1
+        lastSelfWriteDate = Self.modificationDate(of: URL(fileURLWithPath: panel.filePath))
+
+        // Column-shaped state only survives while the shape does.
+        if layout.columnCount != loaded.columnWidths.count {
+            layout = FilePreviewCSVColumnLayout(widths: loaded.columnWidths)
+            sort.clear()
+            selectedColumn = nil
+        }
+
+        let liveRowIDs = Set(loaded.rows.map(\.id))
+        checkedRowIDs.formIntersection(liveRowIDs)
+        if let selected = selectedRowID, !liveRowIDs.contains(selected) {
+            selectedRowID = nil
+        }
+        if let anchor = checkAnchorRowID, !liveRowIDs.contains(anchor) {
+            checkAnchorRowID = nil
+        }
+
+        rebuildDisplayRows(from: loaded)
+    }
+
+    private func rebuildDisplayRows(from document: CSVPreviewDocument?) {
+        guard let document else {
+            displayRows = []
+            return
+        }
+        guard !sort.isEmpty else {
+            displayRows = document.rows
+            return
+        }
+        let order = FilePreviewCSVRowOrder.displayIndices(
+            cells: document.rows.map(\.cells),
+            sort: sort
+        )
+        displayRows = order.map { document.rows[$0] }
+    }
+
+    private func sortMenu(for column: Int) -> some View {
+        Group {
+            Button(String(
+                localized: "filePreview.csv.sortAscending",
+                defaultValue: "Sort Ascending"
+            )) { applySort(column: column, direction: .ascending) }
+            Button(String(
+                localized: "filePreview.csv.sortDescending",
+                defaultValue: "Sort Descending"
+            )) { applySort(column: column, direction: .descending) }
+            if sort.rank(ofColumn: column) != nil {
+                Button(String(
+                    localized: "filePreview.csv.sortRemove",
+                    defaultValue: "Remove From Sort"
+                )) { sort.remove(column: column) }
+            }
+            if !sort.isEmpty {
+                Divider()
+                Button(String(
+                    localized: "filePreview.csv.sortClear",
+                    defaultValue: "Clear All Sorts"
+                )) { sort.clear() }
+            }
+            if let document, document.isEditable {
+                Divider()
+                Button(
+                    String(
+                        localized: "filePreview.csv.deleteColumn",
+                        defaultValue: "Delete Column"
+                    ),
+                    role: .destructive
+                ) { deleteColumn(column, in: document) }
+            }
+        }
+    }
+
+    /// Deletes a column from the sheet and every structure that indexes into it.
+    ///
+    /// Column ids here are positions, not stable identifiers, so removing one
+    /// renumbers everything above it: the layout's widths and order, the sort
+    /// keys, the selected column, and any open editor. Each is corrected before
+    /// the document is persisted so nothing is left pointing at a column that
+    /// has moved or gone.
+    private func deleteColumn(_ column: Int, in document: CSVPreviewDocument) {
+        guard document.isEditable else { return }
+        var updated = document
+        guard let removed = updated.deleteColumn(at: column) else { return }
+
+        undoStack.record(.insertColumn(index: column, name: removed.name, values: removed.values))
+        redoStack.removeAll()
+
+        var movedLayout = layout
+        movedLayout.removeColumn(column)
+        layout = movedLayout
+
+        var movedSort = sort
+        movedSort.columnRemoved(column)
+        sort = movedSort
+
+        if let selected = selectedColumn {
+            selectedColumn = selected == column ? nil : (selected > column ? selected - 1 : selected)
+        }
+        if let editing = editingCell {
+            editingCell = editing.column == column
+                ? nil
+                : (editing.column > column
+                    ? EditingCell(rowID: editing.rowID, column: editing.column - 1)
+                    : editing)
+        }
+        // Match rows index by column, so any hit above the deletion now points
+        // at the wrong cell; the version bump reruns the scan.
+        documentVersion += 1
+
+        persist(updated)
+    }
+
+    private func applySort(column: Int, direction: FilePreviewCSVSort.Direction) {
+        sort.set(column: column, to: direction)
+    }
+
+    /// The header's sort control: an arrow for the direction, and the column's
+    /// place in the chain once more than one column is sorted.
+    private func sortControl(for column: Int) -> some View {
+        let rank = sort.rank(ofColumn: column)
+        let direction = sort.direction(ofColumn: column)
+        return Button {
+            sort.cycle(column: column)
+        } label: {
+            HStack(spacing: 1) {
+                Image(systemName: direction == .descending ? "arrow.down" : "arrow.up")
+                    .font(.system(size: 9, weight: .semibold))
+                if let rank, sort.keys.count > 1 {
+                    Text("\(rank)")
+                        .font(.system(size: 8, weight: .semibold))
+                        .monospacedDigit()
+                }
+            }
+            .foregroundStyle(rank == nil ? Color.secondary.opacity(0.55) : Color.accentColor)
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(String(
+            localized: "filePreview.csv.sortHint",
+            defaultValue: "Sort ascending, descending, then off · sorting a second column breaks ties within the first"
+        ))
+    }
+
+    /// Copies the sheet as the user currently sees it — the column order they
+    /// arranged, the row order they sorted — rather than the order on disk,
+    /// since what is on screen is why they are copying rather than reading the
+    /// file. Checked rows narrow it; the header always comes along so the
+    /// result pastes as a table rather than a fragment.
+    private func copyDisplayedCSV(_ document: CSVPreviewDocument) {
+        let columns = layout.order.filter { $0 < document.header.count }
+        let header = columns.map { document.header[$0] }
+        let sourceRows = checkedRowIDs.isEmpty
+            ? displayRows
+            : displayRows.filter { checkedRowIDs.contains($0.id) }
+        let rows = sourceRows.map { row in
+            columns.map { column in column < row.cells.count ? row.cells[column] : "" }
+        }
+        let text = FilePreviewCSVSerializer.serialize(
+            header: header,
+            rows: rows,
+            delimiter: document.delimiter
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        panel.confirmCSVCopy()
+    }
+
+    private var findBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            TextField(
+                String(localized: "filePreview.csv.findPlaceholder", defaultValue: "Find in sheet"),
+                text: $search.query
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .frame(width: 160)
+            .focused($findFieldFocused)
+            .onSubmit { stepMatch(by: 1) }
+            // Shift-return for the previous match: `onSubmit` cannot see the
+            // modifier, so the chord is read before the field commits.
+            .onKeyPress(.return, phases: [.down]) { keyPress in
+                stepMatch(by: keyPress.modifiers.contains(.shift) ? -1 : 1)
+                return .handled
+            }
+            .onExitCommand { closeFind() }
+            Text(matchCountLabel)
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 54, alignment: .trailing)
+            findStepButton(systemName: "chevron.up", offset: -1, hint: String(
+                localized: "filePreview.csv.findPrevious",
+                defaultValue: "Previous match (⇧⏎)"
+            ))
+            findStepButton(systemName: "chevron.down", offset: 1, hint: String(
+                localized: "filePreview.csv.findNext",
+                defaultValue: "Next match (⏎)"
+            ))
+            Button {
+                closeFind()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .help(String(localized: "filePreview.csv.findClose", defaultValue: "Close (esc)"))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 0.5)
+        )
+    }
+
+    private func findStepButton(systemName: String, offset: Int, hint: String) -> some View {
+        Button {
+            stepMatch(by: offset)
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .buttonStyle(.plain)
+        .disabled(search.matches.isEmpty)
+        .help(hint)
+    }
+
+    private var matchCountLabel: String {
+        if search.query.isEmpty { return "" }
+        guard let index = search.currentIndex else {
+            return String(localized: "filePreview.csv.findNoMatches", defaultValue: "No results")
+        }
+        return "\(index + 1) / \(search.matches.count)"
+    }
+
+    private func stepMatch(by offset: Int) {
+        guard !search.matches.isEmpty else { return }
+        search.step(by: offset)
+    }
+
+    private func openFind() {
+        isFindPresented = true
+        panel.csvFindIsPresented = true
+        findFieldFocused = true
+    }
+
+    private func closeFind() {
+        isFindPresented = false
+        panel.csvFindIsPresented = false
+        findFieldFocused = false
+        search.clear()
+        gridFocused = true
+    }
+
+    private func handleFindSignal(_ signal: FilePreviewCSVFindSignal) {
+        switch signal.intent {
+        case .open: openFind()
+        case .next: stepMatch(by: 1)
+        case .previous: stepMatch(by: -1)
+        }
+    }
+
+    /// Rescans the sheet whenever the query changes.
+    ///
+    /// The scan runs off the main actor because it is linear in cells and the
+    /// grid holds up to 50k rows; `.task(id:)` cancels the previous scan when
+    /// the next keystroke lands, which also debounces fast typing.
+    private func recomputeMatches() async {
+        let query = search.query
+        guard !query.isEmpty else {
+            search.apply([])
+            return
+        }
+        // Scanned in display order so the arrows step down the sheet as the
+        // user sees it rather than down the file.
+        let rowIDs = displayRows.map(\.id)
+        let cells = displayRows.map(\.cells)
+        let found = await Task.detached(priority: .userInitiated) {
+            FilePreviewCSVSearch.matches(for: query, rowIDs: rowIDs, cells: cells)
+        }.value
+        guard !Task.isCancelled else { return }
+        search.apply(found)
+    }
+
+    private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        guard editingCell == nil else { return .ignored }
+        let modifiers = keyPress.modifiers
+        let character = keyPress.characters.first
+
+        // Delete: the key reports as .delete, .deleteForward, U+007F or U+0008
+        // depending on keyboard and phase, so accept all of them.
+        let isDeleteKey = keyPress.key == .delete
+            || keyPress.key == .deleteForward
+            || character == "\u{7F}"
+            || character == "\u{08}"
+        if isDeleteKey {
+            guard modifiers.contains(.command) || modifiers.contains(.control) else {
+                return .ignored
+            }
+            return deleteCheckedOrSelectedRows()
+        }
+
+        if keyPress.key == .leftArrow, modifiers.contains(.command) {
+            return moveSelectedColumn(by: -1)
+        }
+        if keyPress.key == .rightArrow, modifiers.contains(.command) {
+            return moveSelectedColumn(by: 1)
+        }
+
+        if character == "z" || character == "Z" {
+            guard modifiers.contains(.command) else { return .ignored }
+            if modifiers.contains(.shift) {
+                guard redoStack.canUndo else { return .ignored }
+                redoLastEdit()
+            } else {
+                guard undoStack.canUndo else { return .ignored }
+                undoLastEdit()
+            }
+            return .handled
+        }
+        return .ignored
+    }
+
+    private func headerRow(for document: CSVPreviewDocument, gridLine: Color) -> some View {
+        HStack(spacing: 0) {
+            Image(systemName: allRowsChecked(document) ? "checkmark.square.fill" : "square")
+                .font(.system(size: 11))
+                .foregroundStyle(allRowsChecked(document) ? Color.accentColor : .secondary)
+                .frame(width: Self.selectGutterWidth)
+                .contentShape(Rectangle())
+                .help(String(
+                    localized: "filePreview.csv.selectAll",
+                    defaultValue: "Select all rows"
+                ))
+                .onTapGesture {
+                    guard document.isEditable else { return }
+                    if allRowsChecked(document) {
+                        checkedRowIDs = []
+                    } else {
+                        checkedRowIDs = Set(document.rows.map(\.id))
+                    }
+                    gridFocused = true
+                }
+            ForEach(Array(layout.order.enumerated()), id: \.element) { displayIndex, column in
+                headerCell(
+                    title: column < document.header.count ? document.header[column] : "",
+                    column: column,
+                    displayIndex: displayIndex
+                )
+            }
+        }
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            gridLine.frame(height: 1)
+        }
+    }
+
+    private func allRowsChecked(_ document: CSVPreviewDocument) -> Bool {
+        !document.rows.isEmpty && checkedRowIDs.count == document.rows.count
+    }
+
+    private func headerCell(title: String, column: Int, displayIndex: Int) -> some View {
+        let isDragging = columnDrag?.displayIndex == displayIndex
+        return HStack(spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            sortControl(for: column)
+        }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .frame(width: layout.width(ofColumn: column), alignment: .leading)
+            .background(
+                isDragging || selectedColumn == column
+                    ? Color.accentColor.opacity(isDragging ? 0.22 : 0.16)
+                    : Color.clear
+            )
+            .offset(x: isDragging ? (columnDrag?.translation ?? 0) : 0)
+            .zIndex(isDragging ? 1 : 0)
+            .help(String(
+                localized: "filePreview.csv.columnHint",
+                defaultValue: "Click to select, then ⌘← / ⌘→ to move · drag to reorder · drag the edge to resize · arrow to sort"
+            ))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedColumn = column
+                gridFocused = true
+            }
+            .contextMenu { sortMenu(for: column) }
+            .gesture(reorderGesture(displayIndex: displayIndex))
+            .overlay(alignment: .trailing) {
+                resizeHandle(column: column)
+            }
+    }
+
+    private func reorderGesture(displayIndex: Int) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                guard resizingColumn == nil else { return }
+                if columnDrag?.displayIndex == displayIndex {
+                    columnDrag?.translation = value.translation.width
+                } else if columnDrag == nil {
+                    columnDrag = ColumnDrag(displayIndex: displayIndex, translation: value.translation.width)
+                }
+            }
+            .onEnded { value in
+                guard let drag = columnDrag, drag.displayIndex == displayIndex else {
+                    columnDrag = nil
+                    return
+                }
+                let destination = layout.dropIndex(
+                    draggingDisplayIndex: displayIndex,
+                    translation: value.translation.width
+                )
+                layout.move(fromDisplayIndex: displayIndex, toDisplayIndex: destination)
+                columnDrag = nil
+            }
+    }
+
+    private func resizeHandle(column: Int) -> some View {
+        ColumnResizeHandle(
+            width: { layout.width(ofColumn: column) },
+            onBegin: { resizingColumn = column },
+            onCommit: { newWidth in
+                layout.resize(column: column, to: newWidth)
+                resizingColumn = nil
+            }
+        )
+    }
+
+    /// Width of the leading select gutter, matched by the header's spacer.
+    private static let selectGutterWidth: CGFloat = 26
+
+    /// One edge of the band drawn around the clicked row.
+    @ViewBuilder
+    private func selectionRule(isSelected: Bool) -> some View {
+        if isSelected {
+            Color.accentColor.frame(height: 1.5)
+        }
+    }
+
+    private func selectBox(rowID: Int, document: CSVPreviewDocument) -> some View {
+        Image(systemName: checkedRowIDs.contains(rowID) ? "checkmark.square.fill" : "square")
+            .font(.system(size: 11))
+            .foregroundStyle(checkedRowIDs.contains(rowID) ? Color.accentColor : .secondary)
+            .frame(width: Self.selectGutterWidth)
+            .contentShape(Rectangle())
+            .help(String(
+                localized: "filePreview.csv.selectRowHint",
+                defaultValue: "Click to select · shift-click to select a range"
+            ))
+            .onTapGesture {
+                guard document.isEditable else { return }
+                toggleCheck(rowID: rowID, in: document)
+            }
+    }
+
+    /// Toggle one row, or extend the checked set from the anchor when shift is
+    /// held. Modifiers come from the current event here, which is the click
+    /// itself for pointer input.
+    private func toggleCheck(rowID: Int, in document: CSVPreviewDocument) {
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        // Measured over the displayed order: with a sort active, the rows
+        // between two clicks are the ones on screen between them, not the ones
+        // between them in the file.
+        if flags.contains(.shift),
+           let anchor = checkAnchorRowID,
+           let anchorIndex = displayRows.firstIndex(where: { $0.id == anchor }),
+           let targetIndex = displayRows.firstIndex(where: { $0.id == rowID }) {
+            let range = anchorIndex <= targetIndex
+                ? anchorIndex...targetIndex
+                : targetIndex...anchorIndex
+            checkedRowIDs.formUnion(displayRows[range].map(\.id))
+        } else {
+            if checkedRowIDs.contains(rowID) {
+                checkedRowIDs.remove(rowID)
+            } else {
+                checkedRowIDs.insert(rowID)
+            }
+            // Only a plain click moves the anchor, so a shift-click always
+            // measures from where the user last started.
+            checkAnchorRowID = rowID
+        }
+        selectedRowID = rowID
+        gridFocused = true
+    }
+
+    private func cellRow(_ row: CSVPreviewDocument.Row, document: CSVPreviewDocument) -> some View {
+        HStack(spacing: 0) {
+            selectBox(rowID: row.id, document: document)
+            ForEach(Array(layout.order.enumerated()), id: \.element) { _, column in
+                if editingCell == EditingCell(rowID: row.id, column: column) {
+                    cellEditor(rowID: row.id, column: column)
+                } else {
+                    cell(
+                        text: column < row.cells.count ? row.cells[column] : "",
+                        width: layout.width(ofColumn: column),
+                        rowID: row.id,
+                        column: column,
+                        isEditable: document.isEditable
+                    )
+                    .modifier(
+                        CSVMatchHighlight(
+                            isMatch: search.isMatch(rowID: row.id, column: column),
+                            isCurrent: search.isCurrent(rowID: row.id, column: column)
+                        )
+                    )
+                }
+            }
+        }
+        .background(
+            selectedRowID == row.id
+                ? Color.accentColor.opacity(0.18)
+                : Color.clear
+        )
+        // A tint alone is easy to lose against the zebra striping and the find
+        // highlight. The rules span the row, so the mark stays visible wherever
+        // the sheet is scrolled sideways — a leading-edge bar would scroll off.
+        .overlay(alignment: .top) { selectionRule(isSelected: selectedRowID == row.id) }
+        .overlay(alignment: .bottom) { selectionRule(isSelected: selectedRowID == row.id) }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedRowID = row.id
+            gridFocused = true
+        }
+    }
+
+    private func cellEditor(rowID: Int, column: Int) -> some View {
+        TextField("", text: $editText)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .frame(width: layout.width(ofColumn: column), alignment: .leading)
+            .background(Color(nsColor: backgroundColor))
+            .overlay(Rectangle().strokeBorder(Color.accentColor, lineWidth: 2))
+            .focused($editorFocused)
+            .onSubmit { commitEdit() }
+            .onExitCommand {
+                editingCell = nil
+                gridFocused = true
+            }
+            .onAppear { editorFocused = true }
+    }
+
+    private func beginEdit(rowID: Int, column: Int, current: String) {
+        editText = current
+        editingCell = EditingCell(rowID: rowID, column: column)
+        selectedRowID = rowID
+    }
+
+    private func commitEdit() {
+        guard var doc = document, let target = editingCell else { return }
+        let previous = doc.cell(rowID: target.rowID, column: target.column)
+        editingCell = nil
+        gridFocused = true
+        guard previous != editText else { return }
+        undoStack.record(.setCell(rowID: target.rowID, column: target.column, previous: previous))
+        redoStack.removeAll()
+        doc.setCell(rowID: target.rowID, column: target.column, to: editText)
+        persist(doc)
+    }
+
+    private func deleteSelectedRow() {
+        guard var doc = document, doc.isEditable, let rowID = selectedRowID else { return }
+        let index = doc.rows.firstIndex { $0.id == rowID }
+        if let index {
+            undoStack.record(.insertRow(index: index, row: doc.rows[index]))
+            redoStack.removeAll()
+        }
+        doc.deleteRow(id: rowID)
+        // Keep the selection on the row that slid up into the deleted slot.
+        if let index {
+            selectedRowID = doc.rows.indices.contains(index)
+                ? doc.rows[index].id
+                : doc.rows.last?.id
+        }
+        editingCell = nil
+        persist(doc)
+    }
+
+    /// Delete the selected row on command-delete or control-delete. Both are
+    /// accepted because either reads as "remove this" depending on habit.
+    /// Delete every checked row, or the clicked row when nothing is checked.
+    @discardableResult
+    private func deleteCheckedOrSelectedRows() -> KeyPress.Result {
+        guard let doc = document, doc.isEditable else { return .ignored }
+        let targets = checkedRowIDs.isEmpty
+            ? [selectedRowID].compactMap { $0 }
+            : doc.rows.map(\.id).filter { checkedRowIDs.contains($0) }
+        guard !targets.isEmpty else { return .ignored }
+        deleteRows(ids: targets)
+        return .handled
+    }
+
+    /// Remove rows bottom-up so each recorded index stays valid, which lets
+    /// cmd-z walk them back one at a time in the order they were removed.
+    private func deleteRows(ids: [Int]) {
+        guard var doc = document, doc.isEditable, !ids.isEmpty else { return }
+        let ordered = ids.compactMap { id in
+            doc.rows.firstIndex(where: { $0.id == id }).map { (index: $0, id: id) }
+        }.sorted { $0.index > $1.index }
+        guard !ordered.isEmpty else { return }
+        for entry in ordered {
+            guard let index = doc.rows.firstIndex(where: { $0.id == entry.id }) else { continue }
+            undoStack.record(.insertRow(index: index, row: doc.rows[index]))
+            doc.deleteRow(id: entry.id)
+        }
+        redoStack.removeAll()
+        checkedRowIDs.subtract(ids)
+        if let selected = selectedRowID, ids.contains(selected) {
+            selectedRowID = nil
+        }
+        editingCell = nil
+        persist(doc)
+    }
+
+    /// Nudge the selected column one slot. Requires command so the arrow keys
+    /// stay available for anything else in the panel, and is ignored while a
+    /// cell editor is open so it cannot fight the text field's caret movement.
+    private func moveSelectedColumn(by offset: Int) -> KeyPress.Result {
+        guard let column = selectedColumn else { return .ignored }
+        // Shift a copy and reveal from that copy rather than re-reading state
+        // that was just written: the reveal needs the post-move order, and
+        // reading it back through the property wrapper is not guaranteed to
+        // hand back the new value in the same closure.
+        var moved = layout
+        guard moved.shift(column: column, by: offset) else { return .ignored }
+        layout = moved
+        revealColumn(column, in: moved)
+        return .handled
+    }
+
+    /// Scrolls horizontally by the least amount that brings a column fully into
+    /// view, leaving the vertical position untouched. A column already on
+    /// screen does not move the sheet at all.
+    private func revealColumn(_ column: Int, in layout: FilePreviewCSVColumnLayout) {
+        guard let scrollView = scrollHandle.scrollView,
+              let displayIndex = layout.displayIndex(ofColumn: column) else { return }
+        let leading = Self.selectGutterWidth + layout.offset(ofDisplayIndex: displayIndex)
+        let trailing = leading + layout.width(ofColumn: column)
+        let clipView = scrollView.contentView
+        let visible = clipView.bounds
+        let maximumX = max(0, scrollView.documentView.map { $0.frame.width - visible.width } ?? 0)
+
+        let targetX: CGFloat
+        if leading < visible.minX {
+            targetX = leading
+        } else if trailing > visible.maxX {
+            targetX = trailing - visible.width
+        } else {
+            return
+        }
+
+        let clampedX = min(max(0, targetX), maximumX)
+        guard abs(clampedX - visible.minX) > 0.5 else { return }
+        clipView.scroll(to: NSPoint(x: clampedX, y: visible.minY))
+        scrollView.reflectScrolledClipView(clipView)
+    }
+
+    /// Keeps the column-indexed view state in step when an undo or redo adds or
+    /// removes a column. Without this the layout would hold a different number
+    /// of widths than the document has columns, and the grid would render
+    /// against stale indices.
+    private func reconcileColumns(for entry: FilePreviewCSVUndoStack<CSVPreviewDocument.Row>.Entry) {
+        switch entry {
+        case let .insertColumn(index, _, _):
+            var updated = layout
+            updated.insertColumn(
+                index,
+                width: FilePreviewCSVColumnLayout.minimumWidth * 3,
+                atDisplayIndex: index
+            )
+            layout = updated
+            documentVersion += 1
+        case let .removeColumn(index):
+            var updatedLayout = layout
+            updatedLayout.removeColumn(index)
+            layout = updatedLayout
+            var updatedSort = sort
+            updatedSort.columnRemoved(index)
+            sort = updatedSort
+            selectedColumn = nil
+            documentVersion += 1
+        case .setCell, .insertRow, .removeRow:
+            break
+        }
+    }
+
+    private func undoLastEdit() {
+        guard var doc = document, doc.isEditable, let entry = undoStack.popLast() else { return }
+        guard let inverse = doc.apply(entry) else { return }
+        redoStack.record(inverse)
+        focusRow(for: entry)
+        reconcileColumns(for: entry)
+        editingCell = nil
+        persist(doc)
+    }
+
+    private func redoLastEdit() {
+        guard var doc = document, doc.isEditable, let entry = redoStack.popLast() else { return }
+        guard let inverse = doc.apply(entry) else { return }
+        undoStack.record(inverse)
+        focusRow(for: entry)
+        reconcileColumns(for: entry)
+        editingCell = nil
+        persist(doc)
+    }
+
+    private func focusRow(for entry: FilePreviewCSVUndoStack<CSVPreviewDocument.Row>.Entry) {
+        switch entry {
+        case let .setCell(rowID, _, _): selectedRowID = rowID
+        case let .insertRow(_, row): selectedRowID = row.id
+        case let .removeRow(rowID): if selectedRowID == rowID { selectedRowID = nil }
+        // Column entries leave every row in place, so the row selection is
+        // still whatever the user last picked.
+        case .insertColumn, .removeColumn: break
+        }
+    }
+
+    /// Apply an edited table to the view and schedule a write.
+    ///
+    /// Writing rewrites the whole file, so batching matters: at the 50k-row cap
+    /// a save-per-edit would rewrite ~25MB every time a cell is committed.
+    /// Edits land in memory immediately and are flushed when the panel goes
+    /// quiet — see `flushSave` for the paths that force one.
+    private func persist(_ updated: CSVPreviewDocument) {
+        document = updated
+        rebuildDisplayRows(from: updated)
+        hasUnsavedEdits = true
+        scheduleSave()
+    }
+
+    /// Debounce a write so a burst of edits collapses into one rewrite. Bounded
+    /// and cancellable: each new edit replaces the pending task.
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            flushSave()
+        }
+    }
+
+    /// Write pending edits now. Called when the panel loses focus, when it
+    /// disappears, and before loading a different file, so edits cannot be
+    /// stranded in memory.
+    private func flushSave(to path: String? = nil) {
+        saveTask?.cancel()
+        saveTask = nil
+        guard hasUnsavedEdits, let document else { return }
+        // `path` is passed explicitly when the previewed file is changing: by
+        // the time onChange fires, panel.filePath is already the *new* file, so
+        // writing the in-memory table there would clobber it with the old
+        // file's contents.
+        let target = path ?? panel.filePath
+        do {
+            let url = URL(fileURLWithPath: target)
+            try document.save(to: url)
+            lastSelfWriteDate = Self.modificationDate(of: url)
+            hasUnsavedEdits = false
+            saveError = nil
+            // Our content is the file now, so whatever landed underneath it has
+            // already been overwritten; there is nothing left to warn about.
+            externalChangeBlocked = false
+        } catch {
+            saveError = error.localizedDescription
+        }
+    }
+
+    @ViewBuilder
+    private func cell(
+        text: String,
+        width: CGFloat,
+        rowID: Int,
+        column: Int,
+        isEditable: Bool
+    ) -> some View {
+        if let url = FilePreviewCSVCellLink.url(for: text) {
+            Text(text)
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .underline()
+                .foregroundStyle(Color.accentColor)
+                .help(String(
+                    localized: "filePreview.csv.linkHint",
+                    defaultValue: "⌘-click to open in cmux · ⌥⌘-click for your default browser"
+                ))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .frame(width: width, alignment: .leading)
+                .contentShape(Rectangle())
+                .modifier(HoverCursor(cursor: .pointingHand))
+                .onTapGesture(count: 2) {
+                    guard isEditable else { return }
+                    beginEdit(rowID: rowID, column: column, current: text)
+                }
+                // One single-tap handler only. Selection happens here too:
+                // adding a second, simultaneous tap gesture for selection
+                // starved this one and cmd-click stopped opening links.
+                .onTapGesture {
+                    let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+                    selectedRowID = rowID
+                    gridFocused = true
+                    guard flags.contains(.command) else { return }
+                    // Option escapes to the system browser for sites that need
+                    // Chrome's extensions or an existing signed-in session.
+                    if flags.contains(.option) {
+                        CmuxLinkOpener.openExternally(url)
+                    } else {
+                        CmuxLinkOpener.open(url, inWorkspace: panel.workspaceId)
+                    }
+                }
+                .contextMenu {
+                    Button(String(
+                        localized: "filePreview.csv.openInCmuxBrowser",
+                        defaultValue: "Open in cmux Browser"
+                    )) { CmuxLinkOpener.open(url, inWorkspace: panel.workspaceId) }
+                    Button(String(
+                        localized: "filePreview.csv.openInDefaultBrowser",
+                        defaultValue: "Open in Default Browser"
+                    )) { CmuxLinkOpener.openExternally(url) }
+                    Divider()
+                    Button(String(
+                        localized: "filePreview.csv.copyLink",
+                        defaultValue: "Copy Link"
+                    )) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                    }
+                    if isEditable {
+                        Divider()
+                        Button(String(
+                            localized: "filePreview.csv.editCell",
+                            defaultValue: "Edit Cell"
+                        )) { beginEdit(rowID: rowID, column: column, current: text) }
+                        Button(String(
+                            localized: "filePreview.csv.deleteRow",
+                            defaultValue: "Delete Row"
+                        ), role: .destructive) {
+                            if checkedRowIDs.contains(rowID) {
+                                deleteRows(ids: Array(checkedRowIDs))
+                            } else {
+                                deleteRows(ids: [rowID])
+                            }
+                        }
+                    }
+                }
+        } else {
+            Text(text)
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(text)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .frame(width: width, alignment: .leading)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    // Runs alongside the double-click edit gesture rather than
+                    // competing with it: as a plain onTapGesture this is
+                    // suppressed while SwiftUI waits for a possible second
+                    // click, so a single click never recorded the selection and
+                    // cmd-delete had no row to act on.
+                    TapGesture().onEnded {
+                        selectedRowID = rowID
+                        gridFocused = true
+                    }
+                )
+                .onTapGesture(count: 2) {
+                    guard isEditable else { return }
+                    beginEdit(rowID: rowID, column: column, current: text)
+                }
+                .contextMenu {
+                    if isEditable {
+                        Button(String(
+                            localized: "filePreview.csv.editCell",
+                            defaultValue: "Edit Cell"
+                        )) { beginEdit(rowID: rowID, column: column, current: text) }
+                        Button(String(
+                            localized: "filePreview.csv.deleteRow",
+                            defaultValue: "Delete Row"
+                        ), role: .destructive) {
+                            selectedRowID = rowID
+                            deleteSelectedRow()
+                        }
+                    }
+                }
+        }
     }
 }

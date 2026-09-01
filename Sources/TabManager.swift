@@ -912,6 +912,9 @@ class TabManager: ObservableObject {
 #endif
             return handled
         }
+        if let csvPanel = focusedCSVFilePreviewPanel {
+            return csvPanel.requestCSVFind()
+        }
         if let browserPanel = focusedBrowserPanel {
             browserPanel.startFind()
             // A diff viewer page owns find in-page; the native bar stays
@@ -943,6 +946,7 @@ class TabManager: ObservableObject {
             _ = TerminalSearchNavigation.next.perform { panel.performBindingAction($0) }
             return
         }
+        if focusedCSVFilePreviewPanel?.requestCSVFindStep(.next) == true { return }
 
         if let browserPanel = focusedBrowserPanel {
             browserPanel.findNext()
@@ -956,6 +960,7 @@ class TabManager: ObservableObject {
             _ = TerminalSearchNavigation.previous.perform { panel.performBindingAction($0) }
             return
         }
+        if focusedCSVFilePreviewPanel?.requestCSVFindStep(.previous) == true { return }
 
         if let browserPanel = focusedBrowserPanel {
             browserPanel.findPrevious()
