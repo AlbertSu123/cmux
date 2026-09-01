@@ -6997,7 +6997,16 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             }
             return nil
         }
-        guard !ghosttyConsumed || resolution.source == .snapshot else {
+        // Consumption means the running program wanted the click — a TUI with
+        // mouse reporting on, which is exactly what an agent's option menu is —
+        // not that ghostty opened anything. Gating on it alone meant cmd-click
+        // did nothing in the panes that print filenames most. A resolved path
+        // that routes in cmux is a real target, so let it through: both ends
+        // open-or-focus, so a path ghostty also handled focuses the split that
+        // is already open rather than making a second one.
+        guard !ghosttyConsumed
+            || resolution.source == .snapshot
+            || CommandClickFileOpenRouter.shouldRouteInCmux(path: resolution.path) else {
 #if DEBUG
             var payload: [String: Any] = [
                 "flags": debugModifierString(modifierFlags),
