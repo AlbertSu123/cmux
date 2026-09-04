@@ -6082,6 +6082,17 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
     ) -> Bool {
         let removedBinding = surfaceResumeBindingsByPanelId.removeValue(forKey: panelId)
         surfaceResumeRestoreClaimsByPanelId.removeValue(forKey: panelId)
+        // Quitting an agent ends its process, not its conversation: the
+        // transcript stays on disk and `--resume <checkpoint>` still works.
+        // Deleting the binding here orphaned the tab, which kept its agent
+        // title with no way back. Demote instead, so nothing auto-resumes but
+        // the checkpoint remains available for a manual resume.
+        if let removedBinding,
+           agentSessionEnded,
+           removedBinding.isAgentHookBinding,
+           Self.normalizedResumeBindingValue(removedBinding.checkpointId) != nil {
+            surfaceResumeBindingsByPanelId[panelId] = removedBinding.disablingAutomaticResume()
+        }
         if let removedBinding,
            agentSessionEnded,
            removedBinding.isAgentHookBinding,
