@@ -28,6 +28,21 @@ private struct StubHostNormalizer: BrowserHostNormalizing {
 @Suite struct TerminalLinkRouterTests {
     private let router = TerminalLinkRouter(hostNormalizer: StubHostNormalizer())
 
+    @Test(arguments: [
+        "vnc://100.77.228.53",
+        "vnc://admin@mac3.local:5900",
+        "VNC://remote.example.com:5901",
+        "vnc://[::1]:5900"
+    ])
+    func vncRoutesToSystemWithOriginalDestination(_ destination: String) throws {
+        let target = try #require(router.resolveOpenURLTarget(destination))
+        guard case let .external(url) = target else {
+            Issue.record("VNC must open in the system application, never the embedded browser")
+            return
+        }
+        #expect(url.absoluteString == destination)
+    }
+
     @Test func resolvesHTTPSAsEmbeddedBrowser() throws {
         let target = try #require(router.resolveOpenURLTarget("https://example.com/path?q=1"))
         guard case let .embeddedBrowser(url) = target else {
