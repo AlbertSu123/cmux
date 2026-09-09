@@ -39,3 +39,13 @@ test("markdown sanitizer blocks passive media fetch URLs", () => {
   expect(sanitizedMarkdownURLAttribute("div", "href", "https://example.com/docs")).toBeNull();
   expect(sanitizedMarkdownURLAttribute("img", "alt", "diagram")).toBeUndefined();
 });
+
+test("Screen Sharing links retain their host while passive fetches remain blocked", () => {
+  for (const url of ["vnc://100.77.228.53", "vnc://admin@mac3.local:5900", "VNC://mac3.local"]) {
+    expect(sanitizedMarkdownURLAttribute("a", "href", url)).toBe(url);
+    expect(sanitizedMarkdownURLAttribute("img", "src", url)).toBeNull();
+  }
+  for (const url of ["vnc:", "vnc://", "vnc:///", "javascript:alert(1)", "data:text/html,hello"]) {
+    expect(isSafeURL(url)).toBe(false);
+  }
+});

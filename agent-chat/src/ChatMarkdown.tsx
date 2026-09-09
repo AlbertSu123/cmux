@@ -195,6 +195,24 @@ const schema = {
   },
 };
 
+type LinkNode = {
+  tagName?: string;
+  properties?: { href?: unknown };
+  children?: LinkNode[];
+};
+
+// The sanitizer compares protocol names case-sensitively. Canonicalize this
+// explicitly supported scheme before sanitizing, without relaxing its policy.
+function normalizeScreenSharingLinks() {
+  return function visit(node: LinkNode) {
+    const href = node.properties?.href;
+    if (node.tagName === "a" && typeof href === "string" && /^vnc:\/\//i.test(href)) {
+      node.properties!.href = href.replace(/^vnc:/i, "vnc:");
+    }
+    node.children?.forEach(visit);
+  };
+}
+
 // Preserve Screen Sharing links only for explicit anchors. Image sources and
 // all other schemes retain react-markdown's default security policy.
 function markdownUrlTransform(url: string, key: string): string {
@@ -234,7 +252,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkBreaks]}
-      rehypePlugins={[[rehypeSanitize, schema]]}
+      rehypePlugins={[normalizeScreenSharingLinks, [rehypeSanitize, schema]]}
       urlTransform={markdownUrlTransform}
       components={components}
     >

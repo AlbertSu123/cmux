@@ -9,7 +9,7 @@ function render(text: string) {
 
 test.each(["vnc://100.77.228.53", "vnc://admin@mac3.local:5900", "VNC://mac3.local"])(
   "Screen Sharing link survives Markdown sanitization: %s", (url) => {
-    expect(render(`[Open Screen Sharing](${url})`)).toContain(`href="${url}"`);
+    expect(render(`[Open Screen Sharing](${url})`)).toContain(`href="${url.replace(/^vnc:/i, "vnc:")}"`);
   },
 );
 
