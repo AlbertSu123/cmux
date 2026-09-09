@@ -701,6 +701,10 @@ final class AgentSessionWebRendererCoordinator: NSObject, WKNavigationDelegate, 
     }
 
     private func handleExternalLink(_ url: URL) {
+        if CmuxLinkOpener.isScreenSharingURL(url) {
+            CmuxLinkOpener.open(url)
+            return
+        }
         guard let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" || scheme == "mailto" else {
             return

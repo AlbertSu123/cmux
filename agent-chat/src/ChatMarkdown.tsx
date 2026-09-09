@@ -185,16 +185,31 @@ export function MarkdownCodeBlock({ code, lang = "text", streaming = false }: { 
 
 const schema = {
   ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), "vnc"],
+  },
   attributes: {
     ...defaultSchema.attributes,
     code: [...(defaultSchema.attributes?.code ?? []), "className"],
   },
 };
 
+// Preserve Screen Sharing links only for explicit anchors. Image sources and
+// all other schemes retain react-markdown's default security policy.
+function markdownUrlTransform(url: string, key: string): string {
+  if (key === "href" && /^vnc:\/\//i.test(url)) {
+    try {
+      if (new URL(url).hostname) return url;
+    } catch { /* Invalid VNC URLs stay blocked below. */ }
+  }
+  return defaultUrlTransform(url);
+}
+
 function markdownComponents(streaming: boolean): Components {
   return {
   a({ href, children }) {
-    const safeHref = defaultUrlTransform(href ?? "");
+    const safeHref = markdownUrlTransform(href ?? "", "href");
     return <a href={safeHref} target="_blank" rel="noopener noreferrer">{children}</a>;
   },
   pre({ children }) {
@@ -220,6 +235,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkBreaks]}
       rehypePlugins={[[rehypeSanitize, schema]]}
+      urlTransform={markdownUrlTransform}
       components={components}
     >
       {text}
