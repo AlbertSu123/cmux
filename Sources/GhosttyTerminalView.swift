@@ -3195,6 +3195,13 @@ class GhosttyApp {
             return false
         case GHOSTTY_ACTION_MOUSE_SHAPE:
             let shape = action.action.mouse_shape
+            // Mouse-position probes run synchronously on the main thread. Never
+            // block a runtime worker (which may own Ghostty's renderer lock).
+            if Thread.isMainThread {
+                MainActor.assumeIsolated {
+                    surfaceView.runtimeMouseIsLink = shape == GHOSTTY_MOUSE_SHAPE_POINTER
+                }
+            }
             DispatchQueue.main.async {
                 surfaceView.updateGhosttyMouseShape(shape)
             }
@@ -3416,7 +3423,7 @@ class GhosttyApp {
                 data: Data(bytes: cstr, count: Int(openUrl.len)),
                 encoding: .utf8
             ) ?? ""
-            let request = TerminalLinkOpenRequest(
+            var request = TerminalLinkOpenRequest(
                 rawValue: urlString,
                 sourceWorkspaceId: callbackTabId ?? surfaceView.tabId,
                 sourcePanelId: callbackSurfaceId ?? surfaceView.terminalSurface?.id,
@@ -3424,6 +3431,7 @@ class GhosttyApp {
             )
             return performOnMain {
                 surfaceView.recordCommandClickReleaseRuntimeOutcome(.openURL)
+                request.browserDestination = surfaceView.terminalLinkClickDestination
                 if TerminalLinkOpenCoordinator().open(request) { return true }
                 // Remote paths stay ours: the coordinator resolves local files,
                 // and a path inside an ssh session is not one, so it declines.
@@ -3662,6 +3670,8 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     var cellSize: CGSize = .zero
     private var lastKnownMousePointInView: NSPoint?
     private let commandClickReleaseRouter = TerminalCommandClickReleaseRouter()
+    fileprivate var runtimeMouseIsLink = false
+    fileprivate var terminalLinkClickDestination: TerminalLinkOpenRequest.BrowserDestination = .configured
     private var commandClickReleaseRoutingActive = false
     private var commandClickReleaseRuntimeOutcome: TerminalCommandClickReleaseRouter.RuntimeOutcome?
     private var ghosttyMouseShape: ghostty_action_mouse_shape_e = GHOSTTY_MOUSE_SHAPE_TEXT
@@ -4397,6 +4407,9 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         _ session: GhosttyMouseSessionLedger.Session
     ) -> Bool {
         let finished = ghosttyMouseSessionLedger.finish(session)
+        if finished, session.button == .left {
+            terminalLinkClickDestination = .configured
+        }
         removeMouseUpEventMonitorIfUnused()
         if session.button == .right {
             removeContextMenuEndObserver()
@@ -4405,6 +4418,8 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     private func resetGhosttyMouseButtonTracking() {
+        terminalLinkClickDestination = .configured
+        runtimeMouseIsLink = false
         ghosttyMouseSessionLedger.invalidate()
         removeMouseUpEventMonitorIfUnused()
         removeContextMenuEndObserver()
@@ -7134,7 +7149,8 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         synchronizeGhosttyMouseSurfaceIdentity()
         let localPoint = convert(event.locationInWindow, from: nil)
         let surfacePoint = NSPoint(x: localPoint.x, y: bounds.height - localPoint.y)
-        let mods = mouseModsFromEvent(event)
+        let mods = terminalLinkClickDestination == .system
+            ? mouseModsFromFlags(.command) : mouseModsFromEvent(event)
         let state = RememberedGhosttyMouseState(
             localPoint: localPoint,
             surfacePoint: surfacePoint,
@@ -7564,6 +7580,20 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         // Focus activation can synchronously reparent or resize the portal.
         // Convert the event after that transaction so the press lands in the
         // current terminal geometry.
+        terminalLinkClickDestination = .configured
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if flags == .option {
+            // Ask Ghostty to resolve the link at this exact point, including OSC 8
+            // links and mouse-reporting applications. Remap only a link click;
+            // Option-click on ordinary text keeps Ghostty's cursor behavior.
+            let point = convert(event.locationInWindow, from: nil)
+            ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, mouseModsFromFlags(.command))
+            if runtimeMouseIsLink {
+                terminalLinkClickDestination = .system
+            }
+        } else if flags == .command {
+            terminalLinkClickDestination = .cmux
+        }
         let mouseState = rememberGhosttyMouseState(from: event)
         #if DEBUG
         let debugPoint = mouseState.localPoint
@@ -7674,6 +7704,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         runtimeOutcome: TerminalCommandClickReleaseRouter.RuntimeOutcome,
         resolution: WordPathResolution?
     ) {
+        defer { terminalLinkClickDestination = .configured }
         beginCommandClickReleaseRouting()
         let consumed = sendGhosttyMouseButton(
             surface,

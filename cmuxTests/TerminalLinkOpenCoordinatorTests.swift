@@ -410,6 +410,41 @@ struct TerminalLinkOpenCoordinatorTests {
         )
     }
 
+    @Test("Explicit click destination overrides the configured browser", arguments: [true, false])
+    @MainActor
+    func explicitClickDestination(useSystemBrowser: Bool) throws {
+        let defaults = makeDefaults()
+        // Set the opposite preference so this exercises the explicit override.
+        defaults.set(useSystemBrowser, forKey: BrowserLinkOpenSettings.openTerminalLinksInCmuxBrowserKey)
+        defaults.set([".*example.*"], forKey: BrowserLinkOpenSettings.browserExternalOpenPatternsKey)
+        let store = DockSplitStore(
+            workspaceId: UUID(),
+            baseDirectoryProvider: { FileManager.default.temporaryDirectory.path },
+            browserAvailabilityProvider: { true }
+        )
+        defer { store.closeAllPanels() }
+        let pane = try #require(store.bonsplitController.allPaneIds.first)
+        let panel = try #require(store.newSurface(kind: .terminal, inPane: pane, focus: true))
+        let url = try #require(URL(string: "https://example.com/click-destination"))
+        var externalURLs: [URL] = []
+        let coordinator = TerminalLinkOpenCoordinator(
+            defaults: defaults,
+            containerResolver: { _, _ in store },
+            externalOpen: { externalURLs.append($0); return true },
+            deferOperation: { $0() }
+        )
+        #expect(coordinator.open(TerminalLinkOpenRequest(
+            browserDestination: useSystemBrowser ? .system : .cmux,
+            rawValue: url.absoluteString,
+            sourceWorkspaceId: nil,
+            sourcePanelId: panel,
+            workingDirectory: nil
+        )))
+        let browsers = store.bonsplitController.allTabIds.compactMap { store.panel(for: $0) as? BrowserPanel }
+        #expect(externalURLs == (useSystemBrowser ? [url] : []))
+        #expect(browsers.count == (useSystemBrowser ? 0 : 1))
+    }
+
     private func makeHTMLFixture(pathExtension: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("cmux-html-click-\(UUID().uuidString)", isDirectory: true)
