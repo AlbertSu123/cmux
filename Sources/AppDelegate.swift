@@ -2180,7 +2180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             extraFileNames = []
         }
         let escapedToken = resolvedFileName.replacingOccurrences(of: " ", with: "\\ ")
-        let baseDisplayToken = displayAsAbsolutePath ? expectedFileURL.path : resolvedFileName
+        let fixtureLinkURL = env["CMUX_UI_TEST_TERMINAL_CMD_CLICK_URL"]
+        let baseDisplayToken = fixtureLinkURL ?? (displayAsAbsolutePath ? expectedFileURL.path : resolvedFileName)
         let resolvedDisplayMode = (displayMode == "raw") ? "raw" : "escaped"
         let resolvedLineFormat: String
         switch lineFormat {
@@ -2208,7 +2209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case "osc8":
             displayToken = resolvedFileName
             let escapedDisplayToken = singleQuotedShellLiteral(displayToken)
-            let escapedURL = singleQuotedShellLiteral(expectedFileURL.absoluteString)
+            let escapedURL = singleQuotedShellLiteral(fixtureLinkURL ?? expectedFileURL.absoluteString)
             shellCommand = "clear\rfor i in $(seq 1 48); do printf '\\033]8;;%s\\033\\\\%s\\033]8;;\\033\\\\\\n' '\(escapedURL)' '\(escapedDisplayToken)'; done\r"
         case "log":
             displayToken = "\(baseDisplayToken)\(displaySuffix)"

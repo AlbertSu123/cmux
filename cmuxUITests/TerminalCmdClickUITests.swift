@@ -181,6 +181,27 @@ final class TerminalCmdClickUITests: XCTestCase {
         )
     }
 
+    func testCommandClickVNCLinksPreserveDestination() throws {
+        for format in [LineFormat.log, .osc8] {
+            let destination = "vnc://127.0.0.1:5901"
+            let app = launchApp(
+                displayMode: .raw,
+                lineFormat: format,
+                fileName: "VNC",
+                captureOpenPaths: false,
+                captureHoverDiagnostics: false,
+                linkURL: destination
+            )
+            _ = try waitForReadySetup()
+            _ = try runCommand(action: "stationary_cmd_click_token")
+            let opened = waitForCapturedOpenPaths(timeout: 5, path: openURLCapturePath)
+            XCTAssertEqual(opened.last, destination, "Command-click must preserve the VNC destination for \(format)")
+            app.terminate()
+            try? FileManager.default.removeItem(atPath: openURLCapturePath)
+            try? FileManager.default.removeItem(atPath: setupDataPath)
+        }
+    }
+
     func testStationaryCmdClickOsc8FileHyperlinkOpensURL() throws {
         let fileName = "Issue 3557 Link.md"
         let app = launchApp(
@@ -805,7 +826,8 @@ final class TerminalCmdClickUITests: XCTestCase {
         openSupportedFilesInCmux: Bool = false,
         openMarkdownInCmuxViewer: Bool? = nil,
         quicklookOverride: String? = nil,
-        viewportOffsetDelta: Int? = nil
+        viewportOffsetDelta: Int? = nil,
+        linkURL: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["CMUX_TAG"] = "ui-test-terminal-cmd-click"
@@ -838,7 +860,10 @@ final class TerminalCmdClickUITests: XCTestCase {
         if captureOpenPaths {
             app.launchEnvironment["CMUX_UI_TEST_CAPTURE_OPEN_PATH"] = openCapturePath
         }
-        if lineFormat == .osc8 {
+        if let linkURL {
+            app.launchEnvironment["CMUX_UI_TEST_TERMINAL_CMD_CLICK_URL"] = linkURL
+        }
+        if lineFormat == .osc8 || linkURL != nil {
             app.launchEnvironment["CMUX_UI_TEST_CAPTURE_OPEN_URL_PATH"] = openURLCapturePath
         }
         if captureHoverDiagnostics {
