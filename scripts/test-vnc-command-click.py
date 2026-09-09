@@ -33,7 +33,7 @@ def main():
     args = parser.parse_args()
     import plistlib
     info = plistlib.loads((args.app / "Contents/Info.plist").read_bytes())
-    assert info["CFBundleIdentifier"].endswith(".installed-vnc-links"), "Only the isolated tagged app is allowed"
+    assert info["CFBundleIdentifier"] == "com.cmuxterm.app.debug.installed.vnc.links", "Only the isolated tagged app is allowed"
     binary = args.app / "Contents/MacOS" / info["CFBundleExecutable"]
     cases = [("log", "vnc://100.77.228.53"), ("osc8", "vnc://100.77.228.53")]
     if not args.open_system:
