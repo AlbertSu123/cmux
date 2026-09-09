@@ -30,6 +30,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("app", type=Path)
     parser.add_argument("--open-system", action="store_true")
+    parser.add_argument("--url")
+    parser.add_argument("--action", default="stationary_cmd_click_token")
     args = parser.parse_args()
     import plistlib
     info = plistlib.loads((args.app / "Contents/Info.plist").read_bytes())
@@ -38,6 +40,8 @@ def main():
     cases = [("log", "vnc://100.77.228.53"), ("osc8", "vnc://100.77.228.53")]
     if not args.open_system:
         cases += [("log", "VNC://remote.example.com:5901"), ("log", "vnc://admin@mac3.local:5900"), ("log", "vnc://[::1]:5900")]
+    if args.url:
+        cases = [("log", args.url), ("osc8", args.url)]
     for mode, destination in cases:
         root = Path(tempfile.mkdtemp(prefix="cmux-vnc-click-"))
         manifest, command, capture = [root / name for name in ("setup.json", "command.json", "open.log")]
@@ -62,7 +66,7 @@ def main():
             try:
                 wait_json(manifest, lambda p: p.get("ready") == "1", process)
                 request_id = str(uuid.uuid4())
-                command.write_text(json.dumps({"id": request_id, "action": "stationary_cmd_click_token"}))
+                command.write_text(json.dumps({"id": request_id, "action": args.action}))
                 result = wait_json(manifest, lambda p: p.get("lastCommandId") == request_id, process)
                 if not args.open_system:
                     opened = capture.read_text().splitlines() if capture.exists() else []

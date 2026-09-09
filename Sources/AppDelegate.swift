@@ -2331,8 +2331,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let rows = max(Int(size.rows), 1)
             let cols = max(Int(size.columns), 1)
             let debugCellSize = terminalPanel.hostedView.debugCellSize
-            let cellWidth = debugCellSize.width > 0 ? debugCellSize.width : CGFloat(size.cell_width_px)
-            let cellHeight = debugCellSize.height > 0 ? debugCellSize.height : CGFloat(size.cell_height_px)
+            // Ghostty reports backing pixels, while the AppKit click harness
+            // takes points. Without this conversion short labels are missed
+            // and rows clamp to the edge on Retina displays.
+            let scale = terminalPanel.hostedView.window?.backingScaleFactor ?? 1
+            let cellWidth = (debugCellSize.width > 0 ? debugCellSize.width : CGFloat(size.cell_width_px)) / scale
+            let cellHeight = (debugCellSize.height > 0 ? debugCellSize.height : CGFloat(size.cell_height_px)) / scale
             guard cellWidth > 0, cellHeight > 0 else { return nil }
 
             let xInset = max(0, (bounds.width - (CGFloat(cols) * cellWidth)) / 2)
