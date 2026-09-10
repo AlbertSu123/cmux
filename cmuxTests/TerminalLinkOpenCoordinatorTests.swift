@@ -447,9 +447,9 @@ struct TerminalLinkOpenCoordinatorTests {
     }
 
     @Test("Stationary link clicks use the requested browser through native mouse events",
-          arguments: ["option", "option-released", "command", "osc8", "text"])
+          arguments: ["option", "option-released", "command", "osc8", "text"], [false, true])
     @MainActor
-    func stationaryOptionClickOpensWebLink(variant: String) async throws {
+    func stationaryOptionClickOpensWebLink(variant: String, hoverFirst: Bool) async throws {
         let url = "https://example.com/option-test"
         let output = variant == "osc8" ? "\\033]8;;\(url)\\007click me\\033]8;;\\007"
             : variant == "text" ? "ordinary terminal text" : url
@@ -504,6 +504,24 @@ struct TerminalLinkOpenCoordinatorTests {
         // Cache a no-link hover with Option already down, then click the SAME cell.
         ghostty_surface_mouse_pos(runtime, point.x, 10,
                                   variant == "command" ? GHOSTTY_MODS_SUPER : GHOSTTY_MODS_ALT)
+        if hoverFirst {
+            let hover = try #require(NSEvent.mouseEvent(
+                with: .mouseMoved, location: location, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+            ))
+            // Exercise both moving over a link and changing modifiers without moving.
+            view.mouseMoved(with: hover)
+            let changed = try #require(NSEvent.keyEvent(
+                with: .flagsChanged, location: location, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: variant == "command" ? 55 : 58
+            ))
+            view.flagsChanged(with: changed)
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(host.linkHoverIndicatorView.isHidden == (variant == "text"))
+        }
         let down = try #require(NSEvent.mouseEvent(
             with: .leftMouseDown, location: location, modifierFlags: flags,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,

@@ -3727,6 +3727,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     fileprivate func updateGhosttyMouseShape(_ shape: ghostty_action_mouse_shape_e) {
         guard ghosttyMouseShape != shape else { return }
         ghosttyMouseShape = shape
+        terminalSurface?.hostedView.linkHoverIndicatorView.setLinkActive(shape == GHOSTTY_MOUSE_SHAPE_POINTER)
         window?.invalidateCursorRects(for: self)
     }
 
@@ -7054,6 +7055,9 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             )
         }
 #endif
+        // Modifier changes must invalidate Ghostty's cached no-link cell, even
+        // when the pointer has not moved since Option/Command was pressed.
+        ghostty_surface_mouse_pos(surface, -1, -1, GHOSTTY_MODS_NONE)
         ghostty_surface_mouse_pos(
             surface,
             point.x,
@@ -7079,7 +7083,11 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         _ flags: NSEvent.ModifierFlags,
         suppressCommandPathHover: Bool
     ) -> ghostty_input_mods_e {
-        let effectiveFlags = suppressCommandPathHover ? flags.subtracting(.command) : flags
+        var effectiveFlags = suppressCommandPathHover ? flags.subtracting(.command) : flags
+        if flags.intersection([.command, .option, .control, .shift]) == .option,
+           !suppressCommandPathHover {
+            effectiveFlags = .command
+        }
 #if DEBUG
         if suppressCommandPathHover, flags.contains(.command) {
             _ = UITestCaptureSink().mutateJSONObjectIfConfigured(
