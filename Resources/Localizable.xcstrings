@@ -1,6 +1,17 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "terminal.linkHover.browserHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "⌘ Click: cmux browser · ⌥ Click: default browser"
+          }
+        }
+      }
+    },
     "about.appName": {
       "extractionState": "manual",
       "localizations": {

@@ -13,6 +13,8 @@ final class GhosttyPassthroughVisualEffectView: NSVisualEffectView {
 final class TerminalLinkHoverIndicatorView: NSView {
     private let backdrop = GhosttyPassthroughVisualEffectView(frame: .zero)
     private let label = NSTextField(labelWithString: "")
+    private var url: String?
+    private var linkActive = false
 
     override var acceptsFirstResponder: Bool { false }
 
@@ -60,11 +62,25 @@ final class TerminalLinkHoverIndicatorView: NSView {
     }
 
     func setURL(_ url: String?) {
-        let url = url?.isEmpty == false ? url : nil
-        label.stringValue = url ?? ""
-        label.setAccessibilityLabel(url)
-        isHidden = url == nil
+        self.url = url?.isEmpty == false ? url : nil
+        refreshLabel()
     }
+
+    func setLinkActive(_ active: Bool) {
+        linkActive = active
+        if !active { url = nil }
+        refreshLabel()
+    }
+
+    private func refreshLabel() {
+        let hint = String(localized: "terminal.linkHover.browserHint",
+                          defaultValue: "⌘ Click: cmux browser · ⌥ Click: default browser")
+        let text = url.map { "\($0)  ·  \(hint)" } ?? hint
+        label.stringValue = text
+        label.setAccessibilityLabel(text)
+        isHidden = !linkActive && url == nil
+    }
+
 }
 
 extension GhosttySurfaceScrollView {

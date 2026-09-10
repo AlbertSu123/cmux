@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CmuxTerminal
 import Testing
 import struct CmuxSettings.AppCatalogSection
 import protocol CmuxWorkspaces.FileOpening
@@ -408,6 +409,139 @@ struct TerminalLinkOpenCoordinatorTests {
         #expect(
             store.bonsplitController.allTabIds.compactMap { store.panel(for: $0) as? BrowserPanel }.isEmpty
         )
+    }
+
+    @Test("Explicit click destination overrides the configured browser", arguments: [true, false])
+    @MainActor
+    func explicitClickDestination(useSystemBrowser: Bool) throws {
+        let defaults = makeDefaults()
+        // Set the opposite preference so this exercises the explicit override.
+        defaults.set(useSystemBrowser, forKey: BrowserLinkOpenSettings.openTerminalLinksInCmuxBrowserKey)
+        defaults.set([".*example.*"], forKey: BrowserLinkOpenSettings.browserExternalOpenPatternsKey)
+        let store = DockSplitStore(
+            workspaceId: UUID(),
+            baseDirectoryProvider: { FileManager.default.temporaryDirectory.path },
+            browserAvailabilityProvider: { true }
+        )
+        defer { store.closeAllPanels() }
+        let pane = try #require(store.bonsplitController.allPaneIds.first)
+        let panel = try #require(store.newSurface(kind: .terminal, inPane: pane, focus: true))
+        let url = try #require(URL(string: "https://example.com/click-destination"))
+        var externalURLs: [URL] = []
+        let coordinator = TerminalLinkOpenCoordinator(
+            defaults: defaults,
+            containerResolver: { _, _ in store },
+            externalOpen: { externalURLs.append($0); return true },
+            deferOperation: { $0() }
+        )
+        #expect(coordinator.open(TerminalLinkOpenRequest(
+            browserDestination: useSystemBrowser ? .system : .cmux,
+            rawValue: url.absoluteString,
+            sourceWorkspaceId: nil,
+            sourcePanelId: panel,
+            workingDirectory: nil
+        )))
+        let browsers = store.bonsplitController.allTabIds.compactMap { store.panel(for: $0) as? BrowserPanel }
+        #expect(externalURLs == (useSystemBrowser ? [url] : []))
+        #expect(browsers.count == (useSystemBrowser ? 0 : 1))
+    }
+
+    @Test("Stationary link clicks use the requested browser through native mouse events",
+          arguments: ["option", "option-released", "command", "osc8", "text"], [false, true])
+    @MainActor
+    func stationaryOptionClickOpensWebLink(variant: String, hoverFirst: Bool) async throws {
+        let url = "https://example.com/option-test"
+        let output = variant == "osc8" ? "\\033]8;;\(url)\\007click me\\033]8;;\\007"
+            : variant == "text" ? "ordinary terminal text" : url
+        let visibleText = variant == "osc8" ? "click me" : variant == "text" ? output : url
+        let flags: NSEvent.ModifierFlags = variant == "command" ? .command : .option
+        let store = DockSplitStore(workspaceId: UUID(), baseDirectoryProvider: { "/tmp" })
+        defer { store.closeAllPanels() }
+        let pane = try #require(store.bonsplitController.allPaneIds.first)
+        let panelID = try #require(store.newSurface(
+            kind: .terminal, inPane: pane,
+            command: "/bin/sh -c 'printf \"\\033[2J\\033[H\(output)\"; sleep 30'",
+            focus: true
+        ))
+        let panel = try #require(store.panels[panelID] as? TerminalPanel)
+        let surface = panel.surface
+        let host = surface.hostedView
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 320),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.contentView = host
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 320)
+        window.makeKeyAndOrderFront(nil)
+        host.attachSurface(surface)
+        host.setVisibleInUI(true)
+        host.setActive(true)
+        let deadline = Date().addingTimeInterval(5)
+        while surface.readText(region: .screen)?.contains(visibleText) != true, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(surface.readText(region: .screen)?.contains(visibleText) == true)
+        let view = try #require(host.subviews.compactMap { $0 as? NSScrollView }.first?
+            .documentView?.subviews.first as? GhosttyNSView)
+        let runtime = try #require(surface.surface)
+        window.makeFirstResponder(view)
+        view.desiredFocus = true
+        try #require(view.terminalPointerShouldForwardActivation())
+        let point = NSPoint(x: 30, y: view.bounds.height - 10)
+        let location = view.convert(point, to: nil)
+        var opened: [TerminalLinkOpenRequest] = []
+        GhosttyNSView.debugTerminalLinkOpenHandler = { source, request in
+            if source === view { opened.append(request) }
+            // Opt-in local smoke check uses the real LaunchServices browser opener.
+            // Normal regression runs remain free of external app/network effects.
+            if variant == "option", UserDefaults.standard.bool(forKey: "debugOptionClickLiveBrowserSmoke") {
+                let handled = TerminalLinkOpenCoordinator().open(request)
+                print("Option-click live browser smoke: \(handled)")
+                return handled
+            }
+            return true
+        }
+        defer { GhosttyNSView.debugTerminalLinkOpenHandler = nil }
+        // Cache a no-link hover with Option already down, then click the SAME cell.
+        ghostty_surface_mouse_pos(runtime, point.x, 10,
+                                  variant == "command" ? GHOSTTY_MODS_SUPER : GHOSTTY_MODS_ALT)
+        if hoverFirst {
+            let hover = try #require(NSEvent.mouseEvent(
+                with: .mouseMoved, location: location, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+            ))
+            // Exercise both moving over a link and changing modifiers without moving.
+            view.mouseMoved(with: hover)
+            let changed = try #require(NSEvent.keyEvent(
+                with: .flagsChanged, location: location, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: variant == "command" ? 55 : 58
+            ))
+            view.flagsChanged(with: changed)
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(host.linkHoverIndicatorView.isHidden == (variant == "text"))
+        }
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: location, modifierFlags: flags,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        let up = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: location,
+            modifierFlags: variant == "option-released" ? [] : flags,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 0
+        ))
+        view.mouseDown(with: down)
+        view.mouseUp(with: up)
+        if variant == "text" {
+            #expect(opened.isEmpty)
+        } else {
+            #expect(opened.count == 1)
+            #expect(opened.first?.rawValue == url)
+            #expect(opened.first?.browserDestination == (variant == "command" ? .cmux : .system))
+        }
     }
 
     private func makeHTMLFixture(pathExtension: String) throws -> URL {

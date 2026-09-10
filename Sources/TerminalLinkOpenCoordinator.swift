@@ -105,7 +105,13 @@ struct TerminalLinkOpenCoordinator {
             )
         }
 
-        guard BrowserLinkOpenSettings.openTerminalLinksInCmuxBrowser(defaults: defaults) else {
+        if case .embeddedBrowser(let url) = target,
+           request.browserDestination == .system {
+            return openExternally(url, reason: "option-click")
+        }
+
+        guard request.browserDestination == .cmux
+            || BrowserLinkOpenSettings.openTerminalLinksInCmuxBrowser(defaults: defaults) else {
             return openExternally(target.url, reason: "cmux browser disabled")
         }
 
@@ -210,26 +216,29 @@ struct TerminalLinkOpenCoordinator {
         request: TerminalLinkOpenRequest,
         container: (any TerminalLinkOpenContainer)?
     ) -> Bool {
-        switch externalNavigationHandler.openConfiguredExternallyResult(url) {
-        case .opened:
-            log(
-                "link.openURL opening externally reason=external pattern " +
-                "opened=1 url=\(url)"
-            )
-            return true
-        case .failed:
-            log(
-                "link.openURL opening externally reason=external pattern " +
-                "opened=0 url=\(url)"
-            )
-            return false
-        case .notConfigured:
-            break
+        if request.browserDestination != .cmux {
+            switch externalNavigationHandler.openConfiguredExternallyResult(url) {
+            case .opened:
+                log(
+                    "link.openURL opening externally reason=external pattern " +
+                    "opened=1 url=\(url)"
+                )
+                return true
+            case .failed:
+                log(
+                    "link.openURL opening externally reason=external pattern " +
+                    "opened=0 url=\(url)"
+                )
+                return false
+            case .notConfigured:
+                break
+            }
         }
         guard let host = BrowserInsecureHTTPSettings.normalizeHost(url.host ?? "") else {
             return openExternally(url, reason: "invalid host")
         }
-        guard BrowserLinkOpenSettings.hostMatchesWhitelist(host, defaults: defaults) else {
+        guard request.browserDestination == .cmux
+            || BrowserLinkOpenSettings.hostMatchesWhitelist(host, defaults: defaults) else {
             return openExternally(url, reason: "host whitelist miss")
         }
         guard BrowserAvailabilitySettings.isEnabled(defaults: defaults),

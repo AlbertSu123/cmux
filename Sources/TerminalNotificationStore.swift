@@ -1501,6 +1501,10 @@ final class TerminalNotificationStore: ObservableObject {
                 .moveTabToTopForNotification(notification.tabId)
         }
 
+        if effects.markUnread, let surfaceId = notification.surfaceId {
+            moveReadySurfaceToFront(workspaceId: notification.tabId, panelId: surfaceId)
+        }
+
         updated.insert(notification, at: 0)
         mutateWorkspaceManualUnread(false, forTabId: notification.tabId)
         if let surfaceId = notification.surfaceId {
@@ -1544,6 +1548,47 @@ final class TerminalNotificationStore: ObservableObject {
             shouldSuppressExternalDelivery: shouldSuppressExternalDelivery,
             effects: effects
         )
+    }
+
+    private func moveReadySurfaceToFront(workspaceId: UUID, panelId: UUID) {
+        if let dock = DockSplitStore.liveStores.first(where: { $0.containsPanel(panelId) }),
+           let tabId = dock.surfaceId(forPanelId: panelId) {
+            Self.moveReadyTabToFront(tabId, in: dock.bonsplitController)
+        } else if let workspace = AppDelegate.shared?.workspaceContainingPanel(
+            panelId: panelId, preferredWorkspaceId: workspaceId
+        )?.workspace, let tabId = workspace.surfaceIdFromPanelId(panelId) {
+            Self.moveReadyTabToFront(tabId, in: workspace.bonsplitController)
+        }
+    }
+
+    /// Notification arrival changes order without selecting or marking the tab read.
+    @discardableResult
+    static func moveReadyTabToFront(_ tabId: TabID, in controller: BonsplitController) -> Bool {
+        guard let pane = controller.paneId(containing: tabId) else { return false }
+        let tabs = controller.tabs(inPane: pane)
+        guard let sourceIndex = tabs.firstIndex(where: { $0.id == tabId }),
+              !tabs[sourceIndex].isPinned else { return false }
+        let destination = (tabs.lastIndex(where: \.isPinned).map { $0 + 1 }) ?? 0
+        guard sourceIndex > destination else { return false }
+
+        let selected = controller.selectedTabId(inPane: pane)
+        let focusedPane = controller.focusedPaneId
+        let delegate = controller.delegate
+        // Bonsplit's reorder API selects the moved tab. Suppress its selection
+        // callbacks and restore selection synchronously before publishing order.
+        controller.delegate = nil
+        let moved = controller.reorderTab(tabId, toIndex: destination)
+        if let selected { controller.selectTab(selected) }
+        if let focusedPane { controller.focusPane(focusedPane) }
+        controller.delegate = delegate
+        if moved {
+            delegate?.splitTabBar(controller, didReorderTabsInPane: pane,
+                                  orderedTabIds: controller.tabs(inPane: pane).map(\.id))
+            // Delivery is asynchronous to the socket request that queued it.
+            // Publish the new order after the actual notification mutation.
+            TerminalController.shared.scheduleSocketReadSnapshotRefresh()
+        }
+        return moved
     }
 
     private func shouldSuppressExternalDelivery(tabId: UUID, surfaceId: UUID?) -> Bool {
