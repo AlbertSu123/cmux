@@ -9,7 +9,7 @@ import CmuxTerminal
 #endif
 
 @MainActor
-@Suite("Terminal search overlay mouse release")
+@Suite("Terminal search overlay mouse release", .serialized)
 struct TerminalSearchOverlayMouseReleaseTests {
     @Test("Search overlay forwards terminal mouse release during selection drag")
     func searchOverlayForwardsTerminalMouseReleaseDuringSelectionDrag() throws {
@@ -77,6 +77,49 @@ struct TerminalSearchOverlayMouseReleaseTests {
             !hostedView.debugSurfaceHasPendingLeftMouseReleaseForTesting(),
             "The pending terminal release state must clear even if the Ghostty surface is gone"
         )
+    }
+
+    @Test("Stationary Option-click reaches the system browser through native mouse events")
+    func stationaryOptionClickOpensWebLink() throws {
+        let url = "https://example.com/option-test"
+        let surface = TerminalSurface(
+            tabId: UUID(), context: GHOSTTY_SURFACE_CONTEXT_SPLIT,
+            configTemplate: nil, workingDirectory: nil,
+            initialCommand: "/bin/sh -c 'printf \"\\033[2J\\033[Hhttps://example.com/option-test\"; sleep 30'"
+        )
+        defer { surface.releaseSurfaceForTesting() }
+        let (host, window) = try attachToWindow(surface: surface)
+        defer { window.orderOut(nil) }
+        #expect(waitUntil(timeout: 5, description: "fixture output") {
+            surface.readText(region: .screen)?.contains(url) == true
+        })
+        let view = try #require(surfaceView(in: host) as? GhosttyNSView)
+        let runtime = try #require(surface.surface)
+        let point = NSPoint(x: 30, y: view.bounds.height - 10)
+        let location = view.convert(point, to: nil)
+        var opened: [TerminalLinkOpenRequest] = []
+        GhosttyNSView.debugTerminalLinkOpenHandler = { source, request in
+            if source === view { opened.append(request) }
+            return true
+        }
+        defer { GhosttyNSView.debugTerminalLinkOpenHandler = nil }
+        // Cache a no-link hover with Option already down, then click the SAME cell.
+        ghostty_surface_mouse_pos(runtime, point.x, 10, GHOSTTY_MODS_ALT)
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: location, modifierFlags: .option,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        let up = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: location, modifierFlags: .option,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 0
+        ))
+        view.mouseDown(with: down)
+        view.mouseUp(with: up)
+        #expect(opened.count == 1)
+        #expect(opened.first?.rawValue == url)
+        #expect(opened.first?.browserDestination == .system)
     }
 
     private func makeTerminalSurface() -> TerminalSurface {

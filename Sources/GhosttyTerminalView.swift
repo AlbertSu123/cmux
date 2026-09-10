@@ -3432,6 +3432,11 @@ class GhosttyApp {
             return performOnMain {
                 surfaceView.recordCommandClickReleaseRuntimeOutcome(.openURL)
                 request.browserDestination = surfaceView.terminalLinkClickDestination
+#if DEBUG
+                if let handler = GhosttyNSView.debugTerminalLinkOpenHandler {
+                    return handler(surfaceView, request)
+                }
+#endif
                 if TerminalLinkOpenCoordinator().open(request) { return true }
                 // Remote paths stay ours: the coordinator resolves local files,
                 // and a path inside an ssh session is not one, so it declines.
@@ -3670,6 +3675,9 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     var cellSize: CGSize = .zero
     private var lastKnownMousePointInView: NSPoint?
     private let commandClickReleaseRouter = TerminalCommandClickReleaseRouter()
+#if DEBUG
+    @MainActor static var debugTerminalLinkOpenHandler: ((GhosttyNSView, TerminalLinkOpenRequest) -> Bool)?
+#endif
     fileprivate var runtimeMouseIsLink = false
     fileprivate var terminalLinkClickDestination: TerminalLinkOpenRequest.BrowserDestination = .configured
     private var commandClickReleaseRoutingActive = false
