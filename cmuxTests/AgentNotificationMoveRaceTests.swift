@@ -25,7 +25,7 @@ struct AgentNotificationRegressionTests {
         for panelId in panels.prefix(pinCount) {
             workspace.setPanelPinned(panelId: panelId, pinned: true)
         }
-        workspace.focusPanel(panels[pinCount])
+        workspace.focusPanel(panels[0])
         let selected = controller.selectedTabId(inPane: pane)
         let focus = workspace.focusedPanelId
         let before = controller.tabs(inPane: pane).map(\.id)
@@ -44,6 +44,33 @@ struct AgentNotificationRegressionTests {
             #expect(!TerminalNotificationStore.moveReadyTabToFront(before[0], in: controller))
             #expect(controller.tabs(inPane: pane).map(\.id) == expected)
         }
+    }
+
+    @Test("Dock attention tabs move behind pins without taking focus")
+    func readyDockNotificationMovesTabLeft() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.restore() }
+        let dock = try #require(fixture.appDelegate.windowDock(for: fixture.manager))
+        defer { dock.closeAllPanels() }
+        let controller = dock.bonsplitController
+        let pane = try #require(controller.allPaneIds.first)
+        var panels: [UUID] = []
+        for _ in 0..<4 {
+            panels.append(try #require(dock.newSurface(kind: .terminal, inPane: pane, focus: false)))
+        }
+        #expect(dock.setDockPanelPinned(panelId: panels[0], pinned: true))
+        let selected = try #require(dock.surfaceId(forPanelId: panels[0]))
+        controller.selectTab(selected)
+        let before = controller.tabs(inPane: pane).map(\.id)
+        let readyTab = try #require(before.last)
+        let readyPanel = try #require(dock.panel(for: readyTab)).id
+        fixture.store.addNotification(tabId: dock.workspaceId, surfaceId: readyPanel,
+                                      title: "Ready", subtitle: "", body: "")
+        await waitForNotification(in: fixture.store)
+        #expect(controller.tabs(inPane: pane).map(\.id) ==
+                [before[0], readyTab] + before.dropFirst().filter { $0 != readyTab })
+        #expect(controller.selectedTabId(inPane: pane) == selected)
+        #expect(fixture.store.hasVisibleNotificationIndicator(forTabId: dock.workspaceId, surfaceId: readyPanel))
     }
 
     struct Fixture {
