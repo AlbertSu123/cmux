@@ -11,6 +11,41 @@ import Testing
 @Suite("Agent notification regressions", .serialized)
 @MainActor
 struct AgentNotificationRegressionTests {
+    @Test("Ready notifications move tabs behind pins without changing selection", arguments: [0, 2])
+    func readyNotificationMovesTabLeft(pinCount: Int) async throws {
+        let fixture = try makeFixture()
+        defer { fixture.restore() }
+        let workspace = fixture.source
+        let controller = workspace.bonsplitController
+        let pane = try #require(controller.allPaneIds.first)
+        var panels = [fixture.panelId]
+        for _ in 0..<4 {
+            panels.append(try #require(workspace.newTerminalSurface(inPane: pane, focus: false)).id)
+        }
+        for panelId in panels.prefix(pinCount) {
+            workspace.setPanelPinned(panelId: panelId, pinned: true)
+        }
+        workspace.focusPanel(panels[pinCount])
+        let selected = controller.selectedTabId(inPane: pane)
+        let focus = workspace.focusedPanelId
+        let before = controller.tabs(inPane: pane).map(\.id)
+        let readyTab = try #require(before.last)
+        let readyPanel = try #require(workspace.panelIdFromSurfaceId(readyTab))
+        fixture.store.addNotification(tabId: workspace.id, surfaceId: readyPanel,
+                                      title: "Ready", subtitle: "", body: "")
+        await waitForNotification(in: fixture.store)
+        let expected = Array(before.prefix(pinCount)) + [readyTab] +
+            before.dropFirst(pinCount).filter { $0 != readyTab }
+        #expect(controller.tabs(inPane: pane).map(\.id) == expected)
+        #expect(controller.selectedTabId(inPane: pane) == selected)
+        #expect(workspace.focusedPanelId == focus)
+        #expect(fixture.store.hasVisibleNotificationIndicator(forTabId: workspace.id, surfaceId: readyPanel))
+        if pinCount > 0 {
+            #expect(!TerminalNotificationStore.moveReadyTabToFront(before[0], in: controller))
+            #expect(controller.tabs(inPane: pane).map(\.id) == expected)
+        }
+    }
+
     struct Fixture {
         let store: TerminalNotificationStore
         let appDelegate: AppDelegate
