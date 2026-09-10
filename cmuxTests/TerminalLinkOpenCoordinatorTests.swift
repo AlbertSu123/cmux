@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CmuxTerminal
 import Testing
 import struct CmuxSettings.AppCatalogSection
 import protocol CmuxWorkspaces.FileOpening
@@ -443,6 +444,68 @@ struct TerminalLinkOpenCoordinatorTests {
         let browsers = store.bonsplitController.allTabIds.compactMap { store.panel(for: $0) as? BrowserPanel }
         #expect(externalURLs == (useSystemBrowser ? [url] : []))
         #expect(browsers.count == (useSystemBrowser ? 0 : 1))
+    }
+
+    @Test("Stationary Option-click reaches the system browser through native mouse events")
+    @MainActor
+    func stationaryOptionClickOpensWebLink() async throws {
+        let url = "https://example.com/option-test"
+        let store = DockSplitStore(workspaceId: UUID(), baseDirectoryProvider: { "/tmp" })
+        defer { store.closeAllPanels() }
+        let pane = try #require(store.bonsplitController.allPaneIds.first)
+        let panelID = try #require(store.newSurface(
+            kind: .terminal, inPane: pane,
+            command: "/bin/sh -c 'printf \"\\033[2J\\033[Hhttps://example.com/option-test\"; sleep 30'",
+            focus: true
+        ))
+        let panel = try #require(store.panels[panelID] as? TerminalPanel)
+        let surface = panel.surface
+        let host = surface.hostedView
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 320),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.contentView = host
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 320)
+        window.makeKeyAndOrderFront(nil)
+        host.attachSurface(surface)
+        host.setVisibleInUI(true)
+        host.setActive(true)
+        let deadline = Date().addingTimeInterval(5)
+        while surface.readText(region: .screen)?.contains(url) != true, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(surface.readText(region: .screen)?.contains(url) == true)
+        let view = try #require(host.subviews.compactMap { $0 as? NSScrollView }.first?
+            .documentView?.subviews.first as? GhosttyNSView)
+        let runtime = try #require(surface.surface)
+        window.makeFirstResponder(view)
+        view.desiredFocus = true
+        try #require(view.terminalPointerShouldForwardActivation())
+        let point = NSPoint(x: 30, y: view.bounds.height - 10)
+        let location = view.convert(point, to: nil)
+        var opened: [TerminalLinkOpenRequest] = []
+        GhosttyNSView.debugTerminalLinkOpenHandler = { source, request in
+            if source === view { opened.append(request) }
+            return true
+        }
+        defer { GhosttyNSView.debugTerminalLinkOpenHandler = nil }
+        // Cache a no-link hover with Option already down, then click the SAME cell.
+        ghostty_surface_mouse_pos(runtime, point.x, 10, GHOSTTY_MODS_ALT)
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: location, modifierFlags: .option,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        let up = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: location, modifierFlags: .option,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 0
+        ))
+        view.mouseDown(with: down)
+        view.mouseUp(with: up)
+        #expect(opened.count == 1)
+        #expect(opened.first?.rawValue == url)
+        #expect(opened.first?.browserDestination == .system)
     }
 
     private func makeHTMLFixture(pathExtension: String) throws -> URL {
