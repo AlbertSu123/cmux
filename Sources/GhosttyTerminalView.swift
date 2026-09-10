@@ -7595,6 +7595,10 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             // links and mouse-reporting applications. Remap only a link click;
             // Option-click on ordinary text keeps Ghostty's cursor behavior.
             let point = convert(event.locationInWindow, from: nil)
+            // Ghostty caches a no-link result per cell. Changing only the
+            // modifiers at that cell does not refresh it; an out-of-viewport
+            // position invalidates that cache before the Command-modifier probe.
+            ghostty_surface_mouse_pos(surface, -1, -1, mouseModsFromFlags(.command))
             ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, mouseModsFromFlags(.command))
             if runtimeMouseIsLink {
                 terminalLinkClickDestination = .system

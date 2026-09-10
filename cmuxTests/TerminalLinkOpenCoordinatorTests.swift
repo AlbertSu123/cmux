@@ -446,16 +446,21 @@ struct TerminalLinkOpenCoordinatorTests {
         #expect(browsers.count == (useSystemBrowser ? 0 : 1))
     }
 
-    @Test("Stationary Option-click reaches the system browser through native mouse events")
+    @Test("Stationary link clicks use the requested browser through native mouse events",
+          arguments: ["option", "option-released", "command", "osc8", "text"])
     @MainActor
-    func stationaryOptionClickOpensWebLink() async throws {
+    func stationaryOptionClickOpensWebLink(variant: String) async throws {
         let url = "https://example.com/option-test"
+        let output = variant == "osc8" ? "\\033]8;;\(url)\\007click me\\033]8;;\\007"
+            : variant == "text" ? "ordinary terminal text" : url
+        let visibleText = variant == "osc8" ? "click me" : variant == "text" ? output : url
+        let flags: NSEvent.ModifierFlags = variant == "command" ? .command : .option
         let store = DockSplitStore(workspaceId: UUID(), baseDirectoryProvider: { "/tmp" })
         defer { store.closeAllPanels() }
         let pane = try #require(store.bonsplitController.allPaneIds.first)
         let panelID = try #require(store.newSurface(
             kind: .terminal, inPane: pane,
-            command: "/bin/sh -c 'printf \"\\033[2J\\033[Hhttps://example.com/option-test\"; sleep 30'",
+            command: "/bin/sh -c 'printf \"\\033[2J\\033[H\(output)\"; sleep 30'",
             focus: true
         ))
         let panel = try #require(store.panels[panelID] as? TerminalPanel)
@@ -471,10 +476,10 @@ struct TerminalLinkOpenCoordinatorTests {
         host.setVisibleInUI(true)
         host.setActive(true)
         let deadline = Date().addingTimeInterval(5)
-        while surface.readText(region: .screen)?.contains(url) != true, Date() < deadline {
+        while surface.readText(region: .screen)?.contains(visibleText) != true, Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        try #require(surface.readText(region: .screen)?.contains(url) == true)
+        try #require(surface.readText(region: .screen)?.contains(visibleText) == true)
         let view = try #require(host.subviews.compactMap { $0 as? NSScrollView }.first?
             .documentView?.subviews.first as? GhosttyNSView)
         let runtime = try #require(surface.surface)
@@ -490,22 +495,28 @@ struct TerminalLinkOpenCoordinatorTests {
         }
         defer { GhosttyNSView.debugTerminalLinkOpenHandler = nil }
         // Cache a no-link hover with Option already down, then click the SAME cell.
-        ghostty_surface_mouse_pos(runtime, point.x, 10, GHOSTTY_MODS_ALT)
+        ghostty_surface_mouse_pos(runtime, point.x, 10,
+                                  variant == "command" ? GHOSTTY_MODS_SUPER : GHOSTTY_MODS_ALT)
         let down = try #require(NSEvent.mouseEvent(
-            with: .leftMouseDown, location: location, modifierFlags: .option,
+            with: .leftMouseDown, location: location, modifierFlags: flags,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
             context: nil, eventNumber: 0, clickCount: 1, pressure: 1
         ))
         let up = try #require(NSEvent.mouseEvent(
-            with: .leftMouseUp, location: location, modifierFlags: .option,
+            with: .leftMouseUp, location: location,
+            modifierFlags: variant == "option-released" ? [] : flags,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
             context: nil, eventNumber: 1, clickCount: 1, pressure: 0
         ))
         view.mouseDown(with: down)
         view.mouseUp(with: up)
-        #expect(opened.count == 1)
-        #expect(opened.first?.rawValue == url)
-        #expect(opened.first?.browserDestination == .system)
+        if variant == "text" {
+            #expect(opened.isEmpty)
+        } else {
+            #expect(opened.count == 1)
+            #expect(opened.first?.rawValue == url)
+            #expect(opened.first?.browserDestination == (variant == "command" ? .cmux : .system))
+        }
     }
 
     private func makeHTMLFixture(pathExtension: String) throws -> URL {
