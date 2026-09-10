@@ -163,3 +163,17 @@ Detailed contributor rules live in `skills/`. Use the task-specific skill before
   build, and never compile cmux-tui on the Mac. The skill lives in cmuxterm-hq at
   `skills/infra/blacksmith-testbox/SKILL.md`; the workflows, `scripts/blacksmith-*.sh`, and the
   `tests/test_testbox_*` guards stay here. Quickest path: `./scripts/blacksmith-testbox-demo.sh`.
+
+## Albert's installed app and source history
+
+Keep one installed app: `/Applications/cmux (Albert's version).app`. Do not create
+timestamped backup `.app` bundles. GitHub is the version archive. Whenever modifying
+Albert's cmux fork, commit the task's changes and push the working branch to `fork`
+(`AlbertSu123/cmux`) before handoff. Do not include unrelated work or force-push
+shared history. Preserve submodule changes on their own remote first.
+
+Use `scripts/albert-update.sh --no-rebase` to install committed changes from the
+current branch. It requires a clean tree, pushes the source branch and an immutable
+`albert-installed/<commit>` tag before replacing the app, and retains rollback data
+only during installation. `--rebase` explicitly opts into updating main from upstream.
+Temporary tagged development builds remain isolated; clean up task builds afterward.
