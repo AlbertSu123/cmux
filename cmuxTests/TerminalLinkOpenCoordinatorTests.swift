@@ -491,6 +491,13 @@ struct TerminalLinkOpenCoordinatorTests {
         var opened: [TerminalLinkOpenRequest] = []
         GhosttyNSView.debugTerminalLinkOpenHandler = { source, request in
             if source === view { opened.append(request) }
+            // Opt-in local smoke check uses the real LaunchServices browser opener.
+            // Normal regression runs remain free of external app/network effects.
+            if variant == "option", UserDefaults.standard.bool(forKey: "debugOptionClickLiveBrowserSmoke") {
+                let handled = TerminalLinkOpenCoordinator().open(request)
+                print("Option-click live browser smoke: \(handled)")
+                return handled
+            }
             return true
         }
         defer { GhosttyNSView.debugTerminalLinkOpenHandler = nil }
