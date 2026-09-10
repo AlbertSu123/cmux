@@ -1584,6 +1584,9 @@ final class TerminalNotificationStore: ObservableObject {
         if moved {
             delegate?.splitTabBar(controller, didReorderTabsInPane: pane,
                                   orderedTabIds: controller.tabs(inPane: pane).map(\.id))
+            // Delivery is asynchronous to the socket request that queued it.
+            // Publish the new order after the actual notification mutation.
+            TerminalController.shared.scheduleSocketReadSnapshotRefresh()
         }
         return moved
     }
