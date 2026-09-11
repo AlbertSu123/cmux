@@ -1,6 +1,50 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "terminal.linkHover.fileHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "⌘ Click: open file"
+          }
+        }
+      }
+    },
+    "terminal.linkHover.applicationHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "⌘ Click: %@"
+          }
+        }
+      }
+    },
+    "terminal.linkHover.openHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "⌘ Click: open link"
+          }
+        }
+      }
+    },
+    "terminal.linkHover.namedBrowserHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "⌘ Click: cmux browser · ⌥ Click: %@"
+          }
+        }
+      }
+    },
     "terminal.linkHover.browserHint": {
       "extractionState": "manual",
       "localizations": {
