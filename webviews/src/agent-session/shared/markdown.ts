@@ -207,7 +207,8 @@ export function isSafeURL(value: string): boolean {
   }
   try {
     const url = new URL(trimmed);
-    return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:";
+    return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:"
+      || (url.protocol === "vnc:" && url.hostname.length > 0);
   } catch {
     return false;
   }

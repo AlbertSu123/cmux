@@ -22,6 +22,10 @@ enum CmuxLinkOpener {
     ///   up splits. This mirrors how markdown and file previews open.
     @discardableResult
     static func open(_ url: URL, inWorkspace workspaceId: UUID? = nil) -> Destination {
+        if isScreenSharingURL(url) {
+            NSWorkspace.shared.open(url)
+            return .systemBrowser
+        }
         if let workspaceId,
            AppDelegate.shared?.tabManager?.openBrowser(
                inWorkspace: workspaceId,
@@ -44,5 +48,10 @@ enum CmuxLinkOpener {
     /// site WebKit renders badly).
     static func openExternally(_ url: URL) {
         NSWorkspace.shared.open(url)
+    }
+
+    /// Recognizes host-addressed Screen Sharing links, never empty or malformed URLs.
+    nonisolated static func isScreenSharingURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "vnc" && url.host?.isEmpty == false
     }
 }

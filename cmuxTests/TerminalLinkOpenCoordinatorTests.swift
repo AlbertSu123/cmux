@@ -40,6 +40,30 @@ struct TerminalLinkOpenCoordinatorTests {
         #expect(indicator.isHidden)
     }
 
+    @Test("VNC links remain valid external Screen Sharing targets")
+    func vncLinksRouteExternally() throws {
+        let defaults = makeDefaults()
+        let url = try #require(URL(string: "vnc://100.84.55.24:5900"))
+        var externallyOpened: [URL] = []
+        let coordinator = TerminalLinkOpenCoordinator(
+            defaults: defaults,
+            containerResolver: { _, _ in nil },
+            externalOpen: { externallyOpened.append($0); return true },
+            deferOperation: { operation in operation() }
+        )
+
+        #expect(coordinator.open(TerminalLinkOpenRequest(
+            browserDestination: .cmux,
+            rawValue: url.absoluteString,
+            sourceWorkspaceId: nil,
+            sourcePanelId: nil,
+            workingDirectory: nil
+        )))
+        #expect(externallyOpened == [url])
+        #expect(CmuxLinkOpener.isScreenSharingURL(url))
+        #expect(!CmuxLinkOpener.isScreenSharingURL(URL(string: "vnc://")!))
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suiteName = "terminal-link-open-coordinator-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

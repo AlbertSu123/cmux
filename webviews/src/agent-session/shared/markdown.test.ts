@@ -22,11 +22,13 @@ test("markdown URL sanitizer allows only external safe schemes and fragments", (
   expect(isSafeURL("https://example.com/docs")).toBe(true);
   expect(isSafeURL("http://example.com/docs")).toBe(true);
   expect(isSafeURL("mailto:support@example.com")).toBe(true);
+  expect(isSafeURL("vnc://100.84.55.24:5900")).toBe(true);
 
   expect(isSafeURL("/etc/passwd")).toBe(false);
   expect(isSafeURL("relative.md")).toBe(false);
   expect(isSafeURL("file:///etc/passwd")).toBe(false);
   expect(isSafeURL("javascript:alert(1)")).toBe(false);
+  expect(isSafeURL("vnc://")).toBe(false);
 });
 
 test("markdown sanitizer blocks passive media fetch URLs", () => {
@@ -35,6 +37,7 @@ test("markdown sanitizer blocks passive media fetch URLs", () => {
   expect(sanitizedMarkdownURLAttribute("video", "poster", "https://example.com/x.png")).toBeNull();
 
   expect(sanitizedMarkdownURLAttribute("a", "href", "https://example.com/docs")).toBe("https://example.com/docs");
+  expect(sanitizedMarkdownURLAttribute("a", "href", "vnc://100.84.55.24:5900")).toBe("vnc://100.84.55.24:5900");
   expect(sanitizedMarkdownURLAttribute("a", "href", "javascript:alert(1)")).toBeNull();
   expect(sanitizedMarkdownURLAttribute("div", "href", "https://example.com/docs")).toBeNull();
   expect(sanitizedMarkdownURLAttribute("img", "alt", "diagram")).toBeUndefined();
