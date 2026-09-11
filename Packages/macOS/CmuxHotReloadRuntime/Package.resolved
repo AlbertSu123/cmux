@@ -1,0 +1,49 @@
+{
+  "pins" : [
+    {
+      "identity" : "dlkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/johnno1962/DLKit",
+      "state" : {
+        "revision" : "018d2895322c4d619de4474f991dfa9405bbac38",
+        "version" : "3.6.0"
+      }
+    },
+    {
+      "identity" : "fishhook",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/johnno1962/fishhook",
+      "state" : {
+        "revision" : "51b4b873fb03072921337fc4b86a45e2fb24556e",
+        "version" : "1.2.2"
+      }
+    },
+    {
+      "identity" : "injectionlite",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/johnno1962/InjectionLite",
+      "state" : {
+        "revision" : "20dd8459d058a6012ea156eecdeef586260ad90d"
+      }
+    },
+    {
+      "identity" : "popen",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/johnno1962/Popen",
+      "state" : {
+        "revision" : "038db824a3c72b88199de2c55884b9d81486ec12",
+        "version" : "2.2.2"
+      }
+    },
+    {
+      "identity" : "swiftregex5",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/johnno1962/SwiftRegex5",
+      "state" : {
+        "revision" : "84c3fa9a180b2c02e65e9a61287445b0482a5efe",
+        "version" : "6.3.0"
+      }
+    }
+  ],
+  "version" : 2
+}

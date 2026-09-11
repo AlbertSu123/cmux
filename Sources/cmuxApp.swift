@@ -40,6 +40,9 @@ enum CmuxMain {
 #endif
         CmuxWorkerEntrypoint(arguments: CommandLine.arguments).runIfRequested()
         SurfaceResumeApprovalStore.preloadSigningSecret()
+#if DEBUG
+        DevelopmentHotReload.prepareEnvironment()
+#endif
         cmuxApp.main()
     }
 }

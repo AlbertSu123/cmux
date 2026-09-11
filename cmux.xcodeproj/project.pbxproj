@@ -1082,6 +1082,7 @@
 		A5001F000000000000000001 /* DetachedFolderDragIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001F000000000000000002 /* DetachedFolderDragIcon.swift */; };
 		B05553C10000000000000001 /* DetachedFolderPathLookupCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B05553C10000000000000002 /* DetachedFolderPathLookupCache.swift */; };
 		B0555303B0555303B0555303 /* DetachedFolderPathLookupCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0555304B0555304B0555304 /* DetachedFolderPathLookupCacheTests.swift */; };
+		DEAD11000000000000000001 /* DevelopmentHotReload.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAD11000000000000000002 /* DevelopmentHotReload.swift */; };
 		DE71CE000000000000000004 /* DeviceRegistryClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE71CE000000000000000003 /* DeviceRegistryClient.swift */; };
 		DE71CE000000000000000002 /* DeviceRegistryClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE71CE000000000000000001 /* DeviceRegistryClientTests.swift */; };
 		DE000A020000000000000001 /* DevWindowDisplayDebugWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE000A020000000000000002 /* DevWindowDisplayDebugWindow.swift */; };
@@ -4069,6 +4070,7 @@
 		A5001F000000000000000002 /* DetachedFolderDragIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetachedFolderDragIcon.swift; sourceTree = "<group>"; };
 		B05553C10000000000000002 /* DetachedFolderPathLookupCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetachedFolderPathLookupCache.swift; sourceTree = "<group>"; };
 		B0555304B0555304B0555304 /* DetachedFolderPathLookupCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetachedFolderPathLookupCacheTests.swift; sourceTree = "<group>"; };
+		DEAD11000000000000000002 /* DevelopmentHotReload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentHotReload.swift; sourceTree = "<group>"; };
 		DE71CE000000000000000003 /* DeviceRegistryClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DeviceRegistryClient.swift; sourceTree = "<group>"; };
 		DE71CE000000000000000001 /* DeviceRegistryClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRegistryClientTests.swift; sourceTree = "<group>"; };
 		DE000A020000000000000002 /* DevWindowDisplayDebugWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevWindowDisplayDebugWindow.swift; sourceTree = "<group>"; };
@@ -7192,6 +7194,7 @@ B8B056D80000000000000002 /* MobileHostIdentityTests.swift */ = {isa = PBXFileRef
 				47895BD8BBB2418438E708F5 /* GhosttyNSView+RemoteReconnect.swift */,
 				C75100010000000000000002 /* GhosttyNSView+SelectionTranslation.swift */,
 				D0B1000BA1B2C3D4E5F60001 /* GhosttyTerminalViewSupport.swift */,
+				DEAD11000000000000000002 /* DevelopmentHotReload.swift */,
 				D0B10013A1B2C3D4E5F60001 /* GhosttyApp+SurfaceConfigurationReload.swift */,
 				D3571001A1B2C3D4E5F60718 /* GhosttyNSView+IMEComposition.swift */,
 				EC010D02 /* GhosttyApp+TerminalCustomUpload.swift */,
@@ -10183,6 +10186,7 @@ B8B056D80000000000000002 /* MobileHostIdentityTests.swift */ = {isa = PBXFileRef
 				F87910140000000000000001 /* DeferredWorkspaceTerminalFontSizeCoordinatorJoin.swift in Sources */,
 				A5001F000000000000000001 /* DetachedFolderDragIcon.swift in Sources */,
 				B05553C10000000000000001 /* DetachedFolderPathLookupCache.swift in Sources */,
+				DEAD11000000000000000001 /* DevelopmentHotReload.swift in Sources */,
 				DE71CE000000000000000004 /* DeviceRegistryClient.swift in Sources */,
 				DE000A020000000000000001 /* DevWindowDisplayDebugWindow.swift in Sources */,
 				DE000A010000000000000001 /* DevWindowDisplayDefault.swift in Sources */,
@@ -12646,7 +12650,11 @@ B8B056D80000000000000002 /* MobileHostIdentityTests.swift */ = {isa = PBXFileRef
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.64.22;
+				EMIT_FRONTEND_COMMAND_LINES = YES;
+				COMPILATION_CACHE_ENABLE_CACHING = NO;
 				OTHER_LDFLAGS = (
+					"-Xlinker",
+					"-interposable",
 					"-lc++",
 					"-framework",
 					Metal,
