@@ -22,7 +22,7 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 BRANCH=""
 UPSTREAM_REMOTE="origin"
 FORK_REMOTE="fork"
-BUILD_TAG="albert-update"
+BUILD_TAG="${CMUX_ALBERT_BUILD_TAG:-albert-update}"
 # Release needs project signing work first: its configuration is CODE_SIGN_STYLE
 # Manual with an empty DEVELOPMENT_TEAM, so the build fails on the app's
 # get-task-allow entitlement. Pass --configuration Release once that is sorted.
