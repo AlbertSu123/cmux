@@ -1,6 +1,17 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "sidebar.restart.button": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart cmux to apply changes"
+          }
+        }
+      }
+    },
     "terminal.linkHover.fileHint": {
       "extractionState": "manual",
       "localizations": {

@@ -15054,6 +15054,18 @@ struct SidebarFooterButtons: View {
 
     var body: some View {
         HStack(spacing: 4) {
+            Button {
+                AppDelegate.shared?.restartApp()
+            } label: {
+                CmuxSystemSymbolImage(systemName: "arrow.clockwise", pointSize: 13, weight: .medium)
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .frame(width: 22, height: 22, alignment: .center)
+            }
+            .buttonStyle(SidebarFooterIconButtonStyle())
+            .frame(width: 22, height: 22, alignment: .center)
+            .safeHelp(String(localized: "sidebar.restart.button", defaultValue: "Restart cmux to apply changes"))
+            .accessibilityLabel(String(localized: "sidebar.restart.button", defaultValue: "Restart cmux to apply changes"))
+            .accessibilityIdentifier("SidebarRestartButton")
             if shows(.account) || shows(.mobileConnect) || shows(.help) {
                 HStack(spacing: 0) {
                     if shows(.account), CmuxFeatureFlags.shared.isSidebarAccountButtonEnabled {
