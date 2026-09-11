@@ -177,3 +177,31 @@ current branch. It requires a clean tree, pushes the source branch and an immuta
 `albert-installed/<commit>` tag before replacing the app, and retains rollback data
 only during installation. `--rebase` explicitly opts into updating main from upstream.
 Temporary tagged development builds remain isolated; clean up task builds afterward.
+
+## Albert's development hot reload
+
+Run `scripts/setup-hot-reload.sh` once to build the pinned standalone InjectionLite
+runtime. Debug cmux loads it and watches the checkout compiled into
+`DevelopmentHotReload.swift`. No helper app or compiler interception is needed.
+Release builds exclude the loader and view hook. The environment must be configured
+in `CmuxMain` before Ghostty initialization: Ghostty retains environment pointers,
+so do not use a reload helper that calls setenv after initialization.
+`CMUX_HOT_RELOAD_DISABLED=1` disables loading for an individual launch; XCTest
+hosts also skip it.
+
+For compatible Swift function-body edits, save the source and verify injection
+before asking for a restart. The per-process diagnostic lives at
+`$TMPDIR/cmux-hot-reload-<pid>.json`; its revision advances after each injection.
+`scripts/test-hot-reload.py --pid <pid>` changes and restores a diagnostic method
+and requires both updates to occur in that same process. From a tagged app terminal,
+add `--tag <tag>` to also verify tab/focus preservation and that a new terminal
+executes a shell command after injection. The main ContentView
+observes injection without changing view identity; other independently rendered
+SwiftUI views may need the same observation hook when edited.
+
+Stored-property, signature, inheritance, native-library, or other structural
+changes still need a tagged rebuild and relaunch. Never automatically quit
+Albert's main app. Live injections are temporary: still build/install the final
+committed source so the next launch contains the changes, and keep the existing
+fork push and installed-source-tag requirements. Do not mistake replacing the
+app bundle on disk for updating the code already loaded in the running process.

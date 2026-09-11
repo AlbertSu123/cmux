@@ -840,6 +840,9 @@ struct SidebarUnreadSnapshotObserver: View {
 }
 
 struct ContentView: View {
+#if DEBUG
+    @ObservedObject private var developmentHotReload = DevelopmentHotReload.shared
+#endif
     private enum CommandPaletteTaskKey: Hashable, Sendable {
         case searchIndexBuild
         case search
@@ -2674,6 +2677,7 @@ struct ContentView: View {
 
     var body: some View {
 #if DEBUG
+        let _ = developmentHotReload.revision
         let _ = { minimalModeInvalidationProbe.contentViewBody?() }()
 #endif
         let appearance = windowAppearanceSnapshot
