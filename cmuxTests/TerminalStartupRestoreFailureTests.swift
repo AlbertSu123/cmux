@@ -392,6 +392,50 @@ struct TerminalStartupRestoreFailureTests {
         #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.autoResume == true)
     }
 
+    @Test("Incomplete startup index preserves the exact Codex restore until fresh admission")
+    func incompleteStartupIndexRetainsPendingCodexRestore() async throws {
+        let defaults = try makeAutoResumeDefaults()
+        defer { defaults.store.removePersistentDomain(forName: defaults.name) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let state = root.appendingPathComponent(".cmuxterm")
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("{".utf8).write(to: state.appendingPathComponent("codex-hook-sessions.json"))
+        let incomplete = await Task.detached {
+            RestorableAgentSessionIndex.load(homeDirectory: root.path)
+        }.value
+        #expect(!incomplete.isComplete)
+
+        let workspace = Workspace(agentSessionAutoResumeDefaults: defaults.store)
+        defer { workspace.teardownAllPanels() }
+        let panelID = try #require(workspace.focusedPanelId)
+        let sessionID = UUID().uuidString
+        let binding = SurfaceResumeBindingSnapshot(
+            name: "Codex", kind: "codex", command: "codex resume \(sessionID)",
+            cwd: root.path, checkpointId: sessionID, source: "agent-hook",
+            autoResume: true, updatedAt: 1_800_000_400
+        )
+        workspace.surfaceResumeBindingsByPanelId[panelID] = binding
+        workspace.deferredAgentResumeRestoresByPanelId[panelID] = DeferredAgentResumeRestore(
+            stablePanelID: panelID, restorableAgent: nil, resumeBinding: binding,
+            restoresRemoteWorkspaceTerminalSnapshot: false,
+            workingDirectory: root.path, resumeWorkingDirectory: root.path
+        )
+        workspace.resolveDeferredAgentResumeRestores(using: incomplete)
+        #expect(workspace.deferredAgentResumeRestoresByPanelId[panelID] != nil)
+        #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.autoResume == true)
+        #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.checkpointId == sessionID)
+
+        // A user replacing the session while we wait must cancel the old request.
+        var replacement = binding
+        replacement.checkpointId = UUID().uuidString
+        workspace.surfaceResumeBindingsByPanelId[panelID] = replacement
+        workspace.resolveDeferredAgentResumeRestores(using: .empty)
+        #expect(workspace.deferredAgentResumeRestoresByPanelId[panelID] == nil)
+        #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.checkpointId == replacement.checkpointId)
+        #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.autoResume == true)
+    }
+
     private func makeAutoResumeDefaults() throws -> (store: UserDefaults, name: String) {
         let name = "cmux-terminal-startup-failure-\(UUID().uuidString)"
         let store = try #require(UserDefaults(suiteName: name))
