@@ -13,6 +13,57 @@ import protocol CmuxWorkspaces.FileOpening
 
 @Suite("Terminal link open coordinator", .serialized)
 struct TerminalLinkOpenCoordinatorTests {
+    @Test("Hover hints describe the destination instead of treating every link as a browser link",
+          arguments: ["https://example.com", "vnc://example.com", "file:///tmp/cmux-hover-test.txt"])
+    @MainActor
+    func hoverHintDestination(rawURL: String) throws {
+        let indicator = TerminalLinkHoverIndicatorView(frame: .zero)
+        indicator.setURL(rawURL)
+        let label = try #require(indicator.subviews.flatMap { $0.subviews }
+            .compactMap { $0 as? NSTextField }.first)
+        #expect(!indicator.isHidden)
+        #expect(label.stringValue.contains(rawURL))
+        if rawURL.hasPrefix("https:") {
+            #expect(label.stringValue.contains("cmux browser"))
+            if let handler = NSWorkspace.shared.urlForApplication(toOpen: URL(string: rawURL)!) {
+                let bundle = Bundle(url: handler)
+                let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+                    ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
+                    ?? handler.deletingPathExtension().lastPathComponent
+                #expect(label.stringValue.contains(name))
+            }
+        } else {
+            #expect(!label.stringValue.contains("browser"))
+            if rawURL.hasPrefix("file:") { #expect(label.stringValue.contains("open file")) }
+        }
+        indicator.setURL(nil)
+        #expect(indicator.isHidden)
+    }
+
+    @Test("VNC links remain valid external Screen Sharing targets")
+    func vncLinksRouteExternally() throws {
+        let defaults = makeDefaults()
+        let url = try #require(URL(string: "vnc://100.84.55.24:5900"))
+        var externallyOpened: [URL] = []
+        let coordinator = TerminalLinkOpenCoordinator(
+            defaults: defaults,
+            containerResolver: { _, _ in nil },
+            externalOpen: { externallyOpened.append($0); return true },
+            deferOperation: { operation in operation() }
+        )
+
+        #expect(coordinator.open(TerminalLinkOpenRequest(
+            browserDestination: .cmux,
+            rawValue: url.absoluteString,
+            sourceWorkspaceId: nil,
+            sourcePanelId: nil,
+            workingDirectory: nil
+        )))
+        #expect(externallyOpened == [url])
+        #expect(CmuxLinkOpener.isScreenSharingURL(url))
+        #expect(!CmuxLinkOpener.isScreenSharingURL(URL(string: "vnc://")!))
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suiteName = "terminal-link-open-coordinator-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

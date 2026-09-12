@@ -1235,6 +1235,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         updateController.model
     }
 
+    /// Relaunch the installed cmux bundle after persistence has flushed the
+    /// current session. This is used by the sidebar when a change requires a
+    /// fresh process instead of dynamic code injection.
+    @MainActor
+    func restartApp() {
+        let bundlePath = Bundle.main.bundlePath
+        let task = Process()
+        task.launchPath = "/usr/bin/open"
+        task.arguments = ["-n", bundlePath]
+        try? task.run()
+        NSApp.terminate(nil)
+    }
+
 #if DEBUG
     private func pointerString(_ object: AnyObject?) -> String {
         guard let object else { return "nil" }

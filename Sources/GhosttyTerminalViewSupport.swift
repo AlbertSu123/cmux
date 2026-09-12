@@ -73,8 +73,33 @@ final class TerminalLinkHoverIndicatorView: NSView {
     }
 
     private func refreshLabel() {
-        let hint = String(localized: "terminal.linkHover.browserHint",
+        let target = url.flatMap { resolveTerminalOpenURLTarget($0) }
+        let applicationName = target.flatMap { NSWorkspace.shared.urlForApplication(toOpen: $0.url) }
+            .map { applicationURL in
+                let application = Bundle(url: applicationURL)
+                return application?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+                    ?? application?.object(forInfoDictionaryKey: "CFBundleName") as? String
+                    ?? applicationURL.deletingPathExtension().lastPathComponent
+            }
+        let hint: String
+        if case .external(let destination) = target {
+            if destination.isFileURL {
+                // Local files may use cmux or the preferred editor, so do not
+                // promise the system's file handler here.
+                hint = String(localized: "terminal.linkHover.fileHint", defaultValue: "⌘ Click: open file")
+            } else if let applicationName {
+                hint = String(format: String(localized: "terminal.linkHover.applicationHint",
+                                             defaultValue: "⌘ Click: %@"), applicationName)
+            } else {
+                hint = String(localized: "terminal.linkHover.openHint", defaultValue: "⌘ Click: open link")
+            }
+        } else if let applicationName {
+            hint = String(format: String(localized: "terminal.linkHover.namedBrowserHint",
+                                         defaultValue: "⌘ Click: cmux browser · ⌥ Click: %@"), applicationName)
+        } else {
+            hint = String(localized: "terminal.linkHover.browserHint",
                           defaultValue: "⌘ Click: cmux browser · ⌥ Click: default browser")
+        }
         let text = url.map { "\($0)  ·  \(hint)" } ?? hint
         label.stringValue = text
         label.setAccessibilityLabel(text)
