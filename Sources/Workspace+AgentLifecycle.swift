@@ -618,19 +618,26 @@ extension Workspace {
         deferredAgentResumeRestoresByPanelId[panelId] = restore
         guard deferredAgentResumeIndexTask == nil else { return }
         deferredAgentResumeIndexTask = Task { @MainActor [weak self] in
-            let index = await SharedLiveAgentIndex.shared.indexRefreshingNow()
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            self.deferredAgentResumeIndexTask = nil
-            guard let index else {
-                self.clearDeferredAgentResumeRestores()
-                return
+            await AgentRestoreAdmissionRetry.run { [weak self] in
+                guard let self, !self.deferredAgentResumeRestoresByPanelId.isEmpty else {
+                    return true
+                }
+                let index = await SharedLiveAgentIndex.shared.indexRefreshingNow()
+                guard !Task.isCancelled else { return true }
+                guard let index else { return false }
+                self.resolveDeferredAgentResumeRestores(using: index)
+                return self.deferredAgentResumeRestoresByPanelId.isEmpty
             }
-            self.resolveDeferredAgentResumeRestores(using: index)
+            guard !Task.isCancelled, let self else { return }
+            self.deferredAgentResumeIndexTask = nil
+            // Exhaustion leaves a manual restore; it never authorizes a launch.
+            if !self.deferredAgentResumeRestoresByPanelId.isEmpty {
+                self.clearDeferredAgentResumeRestores()
+            }
         }
     }
 
-    private func resolveDeferredAgentResumeRestores(
+    func resolveDeferredAgentResumeRestores(
         using index: RestorableAgentSessionIndex
     ) {
         let policy = Self.makeSessionRestorePolicyService()
@@ -655,7 +662,11 @@ extension Workspace {
                 forPanelId: restore.stablePanelID,
                 kind: expectedKind
             ) else {
-                cancelDeferredAgentResumeRestore(panelId: panelId, restore: restore)
+                // A cold index can be incomplete while Codex flushes its state.
+                // Keep the exact pending request for the next bounded scan.
+#if DEBUG
+                cmuxDebugLog("session.restore.wait panel=\(panelId.uuidString.prefix(8)) reason=incomplete-index")
+#endif
                 continue
             }
             guard deferredAgentResumeRestoreMatchesCurrentSession(
@@ -718,7 +729,11 @@ extension Workspace {
                     revalidateProcessEvidence: false
                 )
             guard !ownershipIsBlocked else {
-                cancelDeferredAgentResumeRestore(panelId: panelId, restore: restore)
+                // The previous process may still be exiting during app restart.
+                // Retry fresh evidence; never launch over a live/uncertain owner.
+#if DEBUG
+                cmuxDebugLog("session.restore.wait panel=\(panelId.uuidString.prefix(8)) reason=ownership")
+#endif
                 continue
             }
 
