@@ -76,7 +76,6 @@ enum SidebarFooterControl: CaseIterable, Equatable {
     case mobileConnect
     case help
     case shortcutDiscovery
-    case upgrade
     case extensions
     case update
 }
@@ -86,7 +85,7 @@ enum SidebarFooterPresentationPolicy {
         _ control: SidebarFooterControl,
         presentationMode: WorkspacePresentationModeSettings.Mode
     ) -> Bool {
-        presentationMode != .minimal || control == .upgrade
+        presentationMode != .minimal
     }
 }
 

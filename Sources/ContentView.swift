@@ -15079,14 +15079,11 @@ struct SidebarFooterButtons: View {
                     }
                 }
             }
-            // Command-hold reveal: appears immediately before Upgrade. It stays
-            // mounted while its popover is open so releasing ⌘ does not dismiss it.
+            // Command-hold reveal stays mounted while its popover is open so
+            // releasing ⌘ does not dismiss it.
             if shows(.shortcutDiscovery),
                (showModifierHoldHints && modifierKeyMonitor.isModifierPressed) || isShortcutPopoverPresented {
                 ShortcutDiscoveryButton(isPopoverPresented: $isShortcutPopoverPresented)
-            }
-            if shows(.upgrade) {
-                SidebarProBadge()
             }
             // The puzzle button opens the extensions browser; it only shows
             // while the experimental Extensions feature is enabled.
