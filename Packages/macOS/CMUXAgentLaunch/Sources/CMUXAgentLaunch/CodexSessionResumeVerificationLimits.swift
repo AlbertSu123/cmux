@@ -14,6 +14,13 @@ public struct CodexSessionResumeVerificationLimits: Sendable {
     public static let maximumRolloutBytes = 8 * 1024 * 1024
     /// Maximum leading JSONL lines inspected in any one rollout.
     public static let maximumRolloutLines = 32
+    /// How long an indexed `state_5.sqlite` lookup waits for a lock.
+    ///
+    /// Codex checkpoints its WAL when a process exits, which is exactly what
+    /// every Codex terminal does while cmux relaunches. A reader with no busy
+    /// handler sees that as `SQLITE_BUSY` and would report an existing session
+    /// as unavailable; a short bounded wait keeps the read conclusive.
+    public static let indexBusyTimeoutMilliseconds: Int32 = 2_000
 
     /// Remaining aggregate rollout bytes in this budget.
     public private(set) var remainingBytes: Int

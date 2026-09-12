@@ -654,10 +654,89 @@ struct CodexResumeBindingVerificationTests {
         )
     }
 
+    @Test func indexedLookupWaitsOutTransientDatabaseLock() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let sessionID = "019ff9b0-cbe1-7231-9478-0c55a8c44560"
+        let rollout = try fixture.writeRollout(sessionId: sessionID, source: "cli", originator: "codex-tui")
+        try fixture.insertThread(sessionId: sessionID, rolloutPath: rollout.path, source: "cli")
+        // A Codex process checkpointing its WAL on exit holds the same kind of
+        // lock; the lookup must wait it out instead of reporting unavailable.
+        let lock = try ExclusiveDatabaseLock(databasePath: fixture.databasePath)
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(300)) {
+            lock.release()
+        }
+        defer { lock.release() }
+
+        let result = CodexSessionResumeVerifier().verify(
+            sessionId: sessionID,
+            transcriptPath: nil,
+            codexHome: fixture.codexHome.path
+        )
+
+        guard case .exists(let evidence) = result else {
+            Issue.record("expected exists, got \(result)")
+            return
+        }
+        #expect(evidence.provenance == .tui)
+    }
+
+    @Test func indexedLookupIsUnavailableWhenLockOutlastsBusyTimeout() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let sessionID = "019ff9b1-cbe1-7231-9478-0c55a8c44560"
+        let rollout = try fixture.writeRollout(sessionId: sessionID, source: "cli", originator: "codex-tui")
+        try fixture.insertThread(sessionId: sessionID, rolloutPath: rollout.path, source: "cli")
+        let lock = try ExclusiveDatabaseLock(databasePath: fixture.databasePath)
+        defer { lock.release() }
+
+        let result = CodexSessionResumeVerifier(indexBusyTimeoutMilliseconds: 50).verify(
+            sessionId: sessionID,
+            transcriptPath: nil,
+            codexHome: fixture.codexHome.path
+        )
+
+        #expect(result == .unavailable)
+    }
+
+    /// Holds `BEGIN EXCLUSIVE` on a second connection so readers block.
+    private final class ExclusiveDatabaseLock: @unchecked Sendable {
+        private let guardLock = NSLock()
+        private var database: OpaquePointer?
+
+        init(databasePath: String) throws {
+            var opened: OpaquePointer?
+            guard sqlite3_open(databasePath, &opened) == SQLITE_OK, let opened else {
+                throw FixtureError.database
+            }
+            database = opened
+            guard sqlite3_exec(opened, "BEGIN EXCLUSIVE", nil, nil, nil) == SQLITE_OK else {
+                sqlite3_close(opened)
+                database = nil
+                throw FixtureError.database
+            }
+        }
+
+        func release() {
+            guardLock.lock()
+            defer { guardLock.unlock() }
+            guard let database else { return }
+            sqlite3_exec(database, "COMMIT", nil, nil, nil)
+            sqlite3_close(database)
+            self.database = nil
+        }
+
+        deinit { release() }
+    }
+
     private final class Fixture {
         let root: URL
         let codexHome: URL
         private let database: OpaquePointer?
+
+        var databasePath: String {
+            codexHome.appendingPathComponent("state_5.sqlite").path
+        }
 
         init(createIndex: Bool = true) throws {
             root = FileManager.default.temporaryDirectory

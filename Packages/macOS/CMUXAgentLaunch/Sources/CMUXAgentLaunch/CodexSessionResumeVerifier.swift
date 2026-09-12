@@ -5,10 +5,17 @@ import SQLite3
 /// JSONL files under the effective CODEX_HOME.
 public struct CodexSessionResumeVerifier: Sendable {
     private let legacyRolloutScanner: CodexLegacyRolloutScanner
+    private let indexBusyTimeoutMilliseconds: Int32
 
     /// Creates a stateless Codex resume verifier.
-    public init() {
+    ///
+    /// - Parameter indexBusyTimeoutMilliseconds: How long an indexed lookup
+    ///   waits for a locked `state_5.sqlite` before reporting unavailable.
+    public init(
+        indexBusyTimeoutMilliseconds: Int32 = CodexSessionResumeVerificationLimits.indexBusyTimeoutMilliseconds
+    ) {
         legacyRolloutScanner = CodexLegacyRolloutScanner()
+        self.indexBusyTimeoutMilliseconds = indexBusyTimeoutMilliseconds
     }
 
     /// Checks for an exact durable Codex rollout and records its provenance.
@@ -279,6 +286,7 @@ public struct CodexSessionResumeVerifier: Sendable {
             return nil
         }
         defer { sqlite3_close(database) }
+        sqlite3_busy_timeout(database, indexBusyTimeoutMilliseconds)
 
         var statement: OpaquePointer?
         var includesSource = true
