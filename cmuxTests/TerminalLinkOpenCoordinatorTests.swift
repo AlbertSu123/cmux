@@ -41,6 +41,7 @@ struct TerminalLinkOpenCoordinatorTests {
     }
 
     @Test("VNC links remain valid external Screen Sharing targets")
+    @MainActor
     func vncLinksRouteExternally() throws {
         let defaults = makeDefaults()
         let url = try #require(URL(string: "vnc://100.84.55.24:5900"))
