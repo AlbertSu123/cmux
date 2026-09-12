@@ -15052,19 +15052,43 @@ struct SidebarFooterButtons: View {
         SidebarFooterPresentationPolicy.isVisible(control, presentationMode: presentationMode)
     }
 
+    private var pendingInstalledBuild: InstalledBuildIdentity? {
+        AppDelegate.shared?.installedBuildMonitor.pendingBuild
+    }
+
+    private var restartHelpText: String {
+        guard let pendingInstalledBuild else {
+            return String(localized: "sidebar.restart.button", defaultValue: "Restart cmux to apply changes")
+        }
+        guard let commit = pendingInstalledBuild.commit else {
+            return String(localized: "sidebar.restart.button.pending", defaultValue: "A newer cmux is installed. Restart to use it")
+        }
+        let shortCommit = String(commit.prefix(9))
+        return String(localized: "sidebar.restart.button.pendingCommit", defaultValue: "cmux \(shortCommit) is installed. Restart to use it")
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             Button {
                 AppDelegate.shared?.restartApp()
             } label: {
                 CmuxSystemSymbolImage(systemName: "arrow.clockwise", pointSize: 13, weight: .medium)
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .foregroundStyle(pendingInstalledBuild == nil ? Color(nsColor: .secondaryLabelColor) : cmuxAccentColor())
                     .frame(width: 22, height: 22, alignment: .center)
+                    .overlay(alignment: .topTrailing) {
+                        if pendingInstalledBuild != nil {
+                            Circle()
+                                .fill(cmuxAccentColor())
+                                .frame(width: 6, height: 6)
+                                .offset(x: -2, y: 2)
+                                .accessibilityHidden(true)
+                        }
+                    }
             }
             .buttonStyle(SidebarFooterIconButtonStyle())
             .frame(width: 22, height: 22, alignment: .center)
-            .safeHelp(String(localized: "sidebar.restart.button", defaultValue: "Restart cmux to apply changes"))
-            .accessibilityLabel(String(localized: "sidebar.restart.button", defaultValue: "Restart cmux to apply changes"))
+            .safeHelp(restartHelpText)
+            .accessibilityLabel(restartHelpText)
             .accessibilityIdentifier("SidebarRestartButton")
             if shows(.account) || shows(.mobileConnect) || shows(.help) {
                 HStack(spacing: 0) {

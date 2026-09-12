@@ -12,6 +12,28 @@
         }
       }
     },
+    "sidebar.restart.button.pending": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A newer cmux is installed. Restart to use it"
+          }
+        }
+      }
+    },
+    "sidebar.restart.button.pendingCommit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "cmux %@ is installed. Restart to use it"
+          }
+        }
+      }
+    },
     "terminal.linkHover.fileHint": {
       "extractionState": "manual",
       "localizations": {

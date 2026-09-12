@@ -1235,6 +1235,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         updateController.model
     }
 
+    /// Tracks installs that replace the bundle under the running process so
+    /// the sidebar restart control can show that a relaunch has something to
+    /// apply.
+    lazy var installedBuildMonitor = InstalledBuildMonitor()
+
     /// Relaunch the installed cmux bundle after persistence has flushed the
     /// current session. This is used by the sidebar when a change requires a
     /// fresh process instead of dynamic code injection.
@@ -1462,6 +1467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #if DEBUG
         DevelopmentHotReload.shared.start()
 #endif
+        _ = installedBuildMonitor
         // Composition root for surfaces: this Mac's panes and every cloud machine's
         // cmux-tui session feed one catalog, and the sidebar, drag/drop, socket and CLI all
         // open through `SurfaceCatalog.project`.
