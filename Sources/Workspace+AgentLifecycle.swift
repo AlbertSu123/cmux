@@ -630,9 +630,11 @@ extension Workspace {
             }
             guard !Task.isCancelled, let self else { return }
             self.deferredAgentResumeIndexTask = nil
-            // Exhaustion leaves a manual restore; it never authorizes a launch.
+            // Exhaustion is inconclusive: the old owner may still be exiting or
+            // the index still cold. Leave a manual restore for this launch, but
+            // keep the binding automatic so the next relaunch tries again.
             if !self.deferredAgentResumeRestoresByPanelId.isEmpty {
-                self.clearDeferredAgentResumeRestores()
+                self.clearDeferredAgentResumeRestores(retiresBindings: false)
             }
         }
     }
@@ -850,7 +852,8 @@ extension Workspace {
     func cancelDeferredAgentResumeRestore(
         panelId: UUID,
         restore: DeferredAgentResumeRestore,
-        startRuntime: Bool = true
+        startRuntime: Bool = true,
+        retiresBinding: Bool = true
     ) {
         if startRuntime {
             (panels[panelId] as? TerminalPanel)?.surface.cancelStartupRestoreAdmission()
@@ -859,7 +862,7 @@ extension Workspace {
             restoredAgentLifecycle.clearSessionRestore(panelId: panelId)
         }
         removeDeferredAgentResumeRestore(panelId: panelId)
-        if startRuntime, restore.restorableAgent == nil {
+        if startRuntime, retiresBinding, restore.restorableAgent == nil {
             if let binding = restore.resumeBinding {
                 retireAgentHookResumeBinding(panelId: panelId, matching: binding)
             }
@@ -933,7 +936,10 @@ extension Workspace {
         retireAgentHookResumeBinding(panelId: panelId)
     }
 
-    func clearDeferredAgentResumeRestores(startRuntime: Bool = true) {
+    func clearDeferredAgentResumeRestores(
+        startRuntime: Bool = true,
+        retiresBindings: Bool = true
+    ) {
         deferredAgentResumeIndexTask?.cancel()
         deferredAgentResumeIndexTask = nil
         let panelIds = Set(
@@ -945,7 +951,8 @@ extension Workspace {
                 cancelDeferredAgentResumeRestore(
                     panelId: panelId,
                     restore: restore,
-                    startRuntime: startRuntime
+                    startRuntime: startRuntime,
+                    retiresBinding: retiresBindings
                 )
             } else {
                 if startRuntime {

@@ -436,6 +436,47 @@ struct TerminalStartupRestoreFailureTests {
         #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.autoResume == true)
     }
 
+    @Test("Exhausted admission retries keep automatic resume for the next launch")
+    func exhaustedAdmissionRetriesKeepAutomaticResume() throws {
+        let defaults = try makeAutoResumeDefaults()
+        defer { defaults.store.removePersistentDomain(forName: defaults.name) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(agentSessionAutoResumeDefaults: defaults.store)
+        defer { workspace.teardownAllPanels() }
+        let panelID = try #require(workspace.focusedPanelId)
+        let sessionID = UUID().uuidString
+        let binding = SurfaceResumeBindingSnapshot(
+            name: "Codex", kind: "codex", command: "codex resume \(sessionID)",
+            cwd: root.path, checkpointId: sessionID, source: "agent-hook",
+            autoResume: true, updatedAt: 1_800_000_500
+        )
+        workspace.surfaceResumeBindingsByPanelId[panelID] = binding
+        workspace.deferredAgentResumeRestoresByPanelId[panelID] = DeferredAgentResumeRestore(
+            stablePanelID: panelID, restorableAgent: nil, resumeBinding: binding,
+            restoresRemoteWorkspaceTerminalSnapshot: false,
+            workingDirectory: root.path, resumeWorkingDirectory: root.path
+        )
+
+        workspace.clearDeferredAgentResumeRestores(retiresBindings: false)
+
+        #expect(workspace.deferredAgentResumeRestoresByPanelId[panelID] == nil)
+        #expect(workspace.restoredAgentResumeStatesByPanelId[panelID] == .manualResumeAvailable)
+        #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.autoResume == true)
+        #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.checkpointId == sessionID)
+
+        // A definitive cancellation still retires the binding as before.
+        workspace.deferredAgentResumeRestoresByPanelId[panelID] = DeferredAgentResumeRestore(
+            stablePanelID: panelID, restorableAgent: nil, resumeBinding: binding,
+            restoresRemoteWorkspaceTerminalSnapshot: false,
+            workingDirectory: root.path, resumeWorkingDirectory: root.path
+        )
+        workspace.clearDeferredAgentResumeRestores()
+        #expect(workspace.surfaceResumeBindingsByPanelId[panelID]?.autoResume == false)
+    }
+
     private func makeAutoResumeDefaults() throws -> (store: UserDefaults, name: String) {
         let name = "cmux-terminal-startup-failure-\(UUID().uuidString)"
         let store = try #require(UserDefaults(suiteName: name))
