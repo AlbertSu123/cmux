@@ -14426,6 +14426,8 @@ extension Workspace: BonsplitDelegate {
                 }
             case .newSimulator:
                 _ = newSimulatorSurface(inPane: pane, focus: true)
+            case .closeBrowserTabs:
+                closeBrowserTabs(inPane: pane)
             case .newTerminal, .newBrowser, .splitRight, .splitDown:
                 break
             }

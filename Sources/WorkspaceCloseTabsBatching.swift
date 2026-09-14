@@ -100,3 +100,29 @@ extension Workspace {
         }
     }
 }
+
+extension Workspace {
+    /// Browser tabs in `paneId`, in tab order. Terminals are left alone:
+    /// closing them can kill running agents, which is never what clearing a
+    /// pane full of opened links means.
+    func browserTabIds(inPane paneId: PaneID) -> [TabID] {
+        bonsplitController.tabs(inPane: paneId).map(\.id).filter { tabId in
+            panelIdFromSurfaceId(tabId).flatMap(browserPanel(for:)) != nil
+        }
+    }
+
+    func closeBrowserTabs(inPane paneId: PaneID) {
+        closeTabsFromContextMenu(browserTabIds(inPane: paneId))
+    }
+
+    @discardableResult
+    func closeBrowserTabsInFocusedPane() -> Bool {
+        guard let paneId = bonsplitController.focusedPaneId ?? bonsplitController.allPaneIds.first else {
+            return false
+        }
+        let tabIds = browserTabIds(inPane: paneId)
+        guard !tabIds.isEmpty else { return false }
+        closeTabsFromContextMenu(tabIds)
+        return true
+    }
+}

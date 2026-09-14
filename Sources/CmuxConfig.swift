@@ -938,12 +938,14 @@ struct CmuxSurfaceTabBarButton: Codable, Sendable, Hashable, Identifiable {
     static let newSimulator = actionReference(CmuxSurfaceTabBarBuiltInAction.newSimulator.configID)
     static let splitRight = actionReference(CmuxSurfaceTabBarBuiltInAction.splitRight.configID)
     static let splitDown = actionReference(CmuxSurfaceTabBarBuiltInAction.splitDown.configID)
+    static let closeBrowserTabs = actionReference(CmuxSurfaceTabBarBuiltInAction.closeBrowserTabs.configID)
 
     static let mobileConnect = actionReference(CmuxSurfaceTabBarBuiltInAction.mobileConnect.configID)
 
     static let defaults: [CmuxSurfaceTabBarButton] = [
         .newTerminal,
         .newBrowser,
+        .closeBrowserTabs,
         .splitRight,
         .splitDown
     ]
@@ -1024,6 +1026,13 @@ struct CmuxSurfaceTabBarButton: Codable, Sendable, Hashable, Identifiable {
             }
         }()
 
+        // Bonsplit only knows the four split actions by name; every other
+        // button would otherwise surface its config identifier as the hover
+        // text, so resolve a human title here where the action is known.
+        let builtInTitle: String? = {
+            guard case .builtIn(let builtIn) = action else { return nil }
+            return builtIn.resolvedConfigMetadata.title
+        }()
         return BonsplitConfiguration.SplitActionButton(
             id: id,
             icon: (icon ?? action.defaultButtonIcon).bonsplitIcon(
@@ -1031,7 +1040,7 @@ struct CmuxSurfaceTabBarButton: Codable, Sendable, Hashable, Identifiable {
                 globalConfigPath: globalConfigPath,
                 allowProjectLocalImage: allowProjectLocalIcon
             ),
-            tooltip: tooltip ?? title ?? terminalCommand,
+            tooltip: tooltip ?? title ?? builtInTitle ?? terminalCommand ?? action.workspaceCommandName,
             action: bonsplitAction
         )
     }

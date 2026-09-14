@@ -1,6 +1,17 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "command.closeBrowserTabsInPane.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close Browser Tabs in Pane"
+          }
+        }
+      }
+    },
     "sidebar.restart.button": {
       "extractionState": "manual",
       "localizations": {

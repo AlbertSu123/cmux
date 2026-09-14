@@ -563,6 +563,30 @@ final class CmuxConfigDecodingTests: XCTestCase {
         )
     }
 
+    func testCloseBrowserTabsIsABuiltInPaneBarButton() throws {
+        XCTAssertEqual(CmuxSurfaceTabBarBuiltInAction(configID: "cmux.closeBrowserTabs"), .closeBrowserTabs)
+        XCTAssertEqual(CmuxSurfaceTabBarBuiltInAction(configID: "closeBrowserTabsInPane"), .closeBrowserTabs)
+        XCTAssertTrue(
+            CmuxSurfaceTabBarButton.defaults.contains { $0.action == .actionReference("cmux.closeBrowserTabs") },
+            "The default pane bar should offer a way to clear browser tabs"
+        )
+        let button = CmuxSurfaceTabBarButton.builtIn(.closeBrowserTabs)
+            .bonsplitActionButton(configSourcePath: nil, globalConfigPath: "/tmp/cmux.json")
+        XCTAssertEqual(button.action, .custom(CmuxSurfaceTabBarBuiltInAction.closeBrowserTabs.configID))
+        XCTAssertEqual(button.tooltip, "Close Browser Tabs in Pane")
+    }
+
+    func testPaneBarButtonsWithoutExplicitTooltipExplainThemselves() throws {
+        for action in CmuxSurfaceTabBarBuiltInAction.allCases {
+            let button = CmuxSurfaceTabBarButton.builtIn(action)
+                .bonsplitActionButton(configSourcePath: nil, globalConfigPath: "/tmp/cmux.json")
+            XCTAssertEqual(button.tooltip, action.resolvedConfigMetadata.title, "\(action) should not fall back to its identifier")
+        }
+        let workspaceCommand = CmuxSurfaceTabBarButton(id: "dev", action: .workspaceCommand("Dev Environment"))
+            .bonsplitActionButton(configSourcePath: nil, globalConfigPath: "/tmp/cmux.json")
+        XCTAssertEqual(workspaceCommand.tooltip, "Dev Environment")
+    }
+
     func testDecodeNewWorkspaceAction() throws {
         let json = """
         {

@@ -17320,6 +17320,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if workspace != nil { onExecuted?() }
                 return workspace != nil
             case .newSimulator: return performConfiguredNewSimulatorAction(context: context, onExecuted: onExecuted)
+            case .closeBrowserTabs:
+                guard let workspace = context.tabManager.selectedWorkspace,
+                      workspace.closeBrowserTabsInFocusedPane() else {
+                    return false
+                }
+                onExecuted?()
+                return true
             case .newTerminal:
                 context.tabManager.newSurface()
                 onExecuted?()

@@ -5306,6 +5306,27 @@ final class WorkspaceTerminalConfigInheritanceSelectionTests: XCTestCase {
         )
     }
 
+    func testCloseBrowserTabsInPaneKeepsTerminals() {
+        let manager = TabManager()
+        guard let workspace = manager.selectedWorkspace,
+              let terminalPanelId = workspace.focusedPanelId,
+              let paneId = workspace.paneId(forPanelId: terminalPanelId),
+              let firstBrowser = workspace.newBrowserSurface(inPane: paneId, focus: true),
+              let secondBrowser = workspace.newBrowserSurface(inPane: paneId, focus: true) else {
+            XCTFail("Expected workspace browser setup to succeed")
+            return
+        }
+        XCTAssertEqual(workspace.browserTabIds(inPane: paneId).count, 2)
+
+        workspace.closeBrowserTabs(inPane: paneId)
+
+        XCTAssertNil(workspace.panels[firstBrowser.id])
+        XCTAssertNil(workspace.panels[secondBrowser.id])
+        XCTAssertNotNil(workspace.panels[terminalPanelId], "Terminals must survive clearing browser tabs")
+        XCTAssertTrue(workspace.browserTabIds(inPane: paneId).isEmpty)
+        XCTAssertFalse(workspace.closeBrowserTabsInFocusedPane(), "Nothing left to close")
+    }
+
     func testFallsBackToAnotherTerminalInPaneWhenSelectedTabIsBrowser() {
         let manager = TabManager()
         guard let workspace = manager.selectedWorkspace,
