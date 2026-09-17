@@ -3,6 +3,11 @@ import CMUXAgentLaunch
 import CmuxControlSocket
 import Foundation
 
+/// What a tab that was mid-turn at quit is told when cmux resumes it.
+enum AgentResumeContinuation {
+    static let prompt = "cmux restarted while you were mid-task. Continue from where you left off; do not repeat work that is already done."
+}
+
 @MainActor
 enum ControlSurfaceResumeTarget {
     case workspace(tabManager: TabManager, workspace: Workspace, surfaceID: UUID)
@@ -60,6 +65,15 @@ enum ControlSurfaceResumeTarget {
             workspace.restoredResumeSessionWorkingDirectoriesByPanelId[surfaceID]
         case .dock(_, let dock, let surfaceID):
             dock.restoredResumeSessionWorkingDirectoriesByPanelId[surfaceID]
+        }
+    }
+    /// Consumes the one-shot continuation prompt for a startup-restored tab.
+    func takeContinuationPrompt() -> String? {
+        switch self {
+        case .workspace(_, let workspace, let surfaceID):
+            workspace.takeInterruptedTurnContinuationPrompt(panelId: surfaceID)
+        case .dock:
+            nil
         }
     }
 
@@ -356,6 +370,7 @@ extension TerminalController {
         // returned to the CLI always agrees with the binding that generated its
         // typed `cmux restore <kind> <checkpoint>` selector.
         let restoredAgent = target.restorableAgent
+        let continuationPrompt = target.takeContinuationPrompt()
         let compatibleAgent: (
             snapshot: SessionRestorableAgentSnapshot,
             source: String,
@@ -413,7 +428,8 @@ extension TerminalController {
                     ? nil
                     : workingDirectory,
                 permissionMode: permissionMode,
-                legacyCommand: compatibilityBinding?.inlineStartupInput
+                legacyCommand: compatibilityBinding?.inlineStartupInput,
+                continuationPrompt: continuationPrompt
             )
         }
         guard let binding else { return nil }
@@ -457,7 +473,8 @@ extension TerminalController {
                 ? nil
                 : workingDirectory,
             permissionMode: binding.permissionMode,
-            legacyCommand: compatibilityBinding?.inlineStartupInput
+            legacyCommand: compatibilityBinding?.inlineStartupInput,
+            continuationPrompt: continuationPrompt
         )
     }
 

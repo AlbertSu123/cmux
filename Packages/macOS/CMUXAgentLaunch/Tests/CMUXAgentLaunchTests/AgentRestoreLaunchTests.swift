@@ -128,6 +128,49 @@ import Testing
         #expect(invocation.arguments.contains("-lc") == false)
     }
 
+    @Test func continuationPromptTrailsTheCodexResumeInvocation() throws {
+        let launch = AgentLaunchCommand(
+            launcher: nil,
+            executablePath: "/opt/codex",
+            arguments: ["/opt/codex", "-s", "danger-full-access"],
+            workingDirectory: "/tmp/project",
+            environment: nil,
+            capturedAt: 1,
+            source: "test"
+        )
+        let request = AgentRestoreRequest(
+            mode: .resumeAgent,
+            kind: "codex",
+            checkpointID: sessionID,
+            source: "agent-hook",
+            workingDirectory: "/tmp/project",
+            environment: [:],
+            launchCommand: launch,
+            preparedArguments: nil,
+            observedPermissionMode: nil,
+            continuationPrompt: "Continue where you left off."
+        )
+        let planner = AgentRestorePlanner(isExecutableFile: { $0 == "/shim/codex" })
+        let invocation = try #require(planner.invocation(
+            for: request,
+            ambientEnvironment: ["PATH": "/usr/bin:/bin", "CMUX_CODEX_WRAPPER_SHIM": "/shim/codex"]
+        ))
+
+        #expect(invocation.arguments.dropFirst().starts(with: ["resume", sessionID]))
+        #expect(invocation.arguments.last == "Continue where you left off.")
+        #expect(invocation.arguments.filter { $0 == "Continue where you left off." }.count == 1)
+
+        let withoutPrompt = try #require(planner.invocation(
+            for: AgentRestoreRequest(
+                mode: .resumeAgent, kind: "codex", checkpointID: sessionID, source: "agent-hook",
+                workingDirectory: "/tmp/project", environment: [:], launchCommand: launch,
+                preparedArguments: nil, observedPermissionMode: nil
+            ),
+            ambientEnvironment: ["PATH": "/usr/bin:/bin", "CMUX_CODEX_WRAPPER_SHIM": "/shim/codex"]
+        ))
+        #expect(withoutPrompt.arguments.last != "Continue where you left off.")
+    }
+
     @Test func structuredCodexRestoreCanonicalizesRelativeHomeFromLaunchDirectory() throws {
         let launchDirectory = "/tmp/codex-launch-root/repository"
         let restoredDirectory = "/tmp/codex-launch-root/repository/worktree"

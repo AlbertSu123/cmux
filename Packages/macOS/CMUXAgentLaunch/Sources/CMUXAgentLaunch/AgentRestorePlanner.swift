@@ -94,6 +94,13 @@ public struct AgentRestorePlanner: Sendable {
                 environment: &environment
             )
         }
+        if request.mode == .resumeAgent,
+           Self.continuationPromptKinds.contains(kind),
+           let prompt = normalized(request.continuationPrompt) {
+            // Both CLIs take an opening prompt as the trailing positional of
+            // their resume invocation. Anything else is left to idle.
+            routedArguments.append(prompt)
+        }
         guard !routedArguments.isEmpty else { return nil }
 
         let preflights = hermesPreflights(
@@ -110,6 +117,9 @@ public struct AgentRestorePlanner: Sendable {
             preflightInvocations: preflights
         )
     }
+
+    /// Providers whose resume verb accepts a trailing prompt positional.
+    private static let continuationPromptKinds: Set<String> = ["claude", "codex"]
 
     private func plannedArguments(
         for request: AgentRestoreRequest,

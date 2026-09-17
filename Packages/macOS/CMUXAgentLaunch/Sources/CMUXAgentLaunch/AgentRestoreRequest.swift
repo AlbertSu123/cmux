@@ -20,6 +20,9 @@ public struct AgentRestoreRequest: Equatable, Sendable {
     public let preparedArgumentsWorkingDirectory: String?
     /// The last observed Claude permission mode.
     public let observedPermissionMode: String?
+    /// An opening prompt appended to the resume argv for providers that take
+    /// one, so an agent interrupted mid-turn continues instead of idling.
+    public let continuationPrompt: String?
 
     /// Creates a structured restore request.
     public init(
@@ -32,7 +35,8 @@ public struct AgentRestoreRequest: Equatable, Sendable {
         launchCommand: AgentLaunchCommand?,
         preparedArguments: [String]?,
         preparedArgumentsWorkingDirectory: String? = nil,
-        observedPermissionMode: String?
+        observedPermissionMode: String?,
+        continuationPrompt: String? = nil
     ) {
         self.mode = mode
         self.kind = kind
@@ -44,5 +48,6 @@ public struct AgentRestoreRequest: Equatable, Sendable {
         self.preparedArguments = preparedArguments
         self.preparedArgumentsWorkingDirectory = preparedArgumentsWorkingDirectory
         self.observedPermissionMode = observedPermissionMode
+        self.continuationPrompt = continuationPrompt
     }
 }

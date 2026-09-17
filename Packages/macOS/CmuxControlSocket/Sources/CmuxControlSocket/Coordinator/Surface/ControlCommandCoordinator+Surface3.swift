@@ -342,6 +342,7 @@ extension ControlCommandCoordinator {
             ),
             "permission_mode": orNull(record.permissionMode),
             "legacy_command": orNull(record.legacyCommand),
+            "continuation_prompt": orNull(record.continuationPrompt),
         ])
     }
 

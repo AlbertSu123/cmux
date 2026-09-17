@@ -7801,3 +7801,74 @@ final class WorkspaceSidebarAgentStatusCountTests: XCTestCase {
         XCTAssertFalse(idleValues.contains { $0.hasSuffix(" running") || $0.hasSuffix(" needs input") }, "\(idleValues)")
     }
 }
+
+final class WorkspaceInterruptedTurnContinuationTests: XCTestCase {
+    @MainActor
+    func testSnapshotRecordsWhetherTheAgentWasMidTurn() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+
+        workspace.setAgentLifecycle(key: "codex", panelId: panelId, lifecycle: .running)
+        let busy = workspace.sessionSnapshot(includeScrollback: false)
+        XCTAssertEqual(busy.panels.first { $0.id == panelId }?.terminal?.wasAgentMidTurn, true)
+
+        workspace.setAgentLifecycle(key: "codex", panelId: panelId, lifecycle: .idle)
+        let idle = workspace.sessionSnapshot(includeScrollback: false)
+        XCTAssertEqual(idle.panels.first { $0.id == panelId }?.terminal?.wasAgentMidTurn, false)
+    }
+
+    @MainActor
+    func testContinuationPromptIsHandedOutOnce() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+
+        XCTAssertNil(workspace.takeInterruptedTurnContinuationPrompt(panelId: panelId))
+        workspace.panelsResumingInterruptedTurn.insert(panelId)
+        XCTAssertEqual(workspace.takeInterruptedTurnContinuationPrompt(panelId: panelId), AgentResumeContinuation.prompt)
+        XCTAssertNil(workspace.takeInterruptedTurnContinuationPrompt(panelId: panelId), "The prompt rides along exactly once")
+    }
+
+    @MainActor
+    func testViewingATabSettlesNeedsInputButNotRunning() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+
+        workspace.setAgentLifecycle(key: "claude_code", panelId: panelId, lifecycle: .needsInput)
+        workspace.setAgentLifecycle(key: "codex", panelId: panelId, lifecycle: .running)
+        workspace.settleViewedAgentLifecycle(panelId: panelId)
+
+        XCTAssertEqual(workspace.agentLifecycleStatesByPanelId[panelId]?["claude_code"], .idle)
+        XCTAssertEqual(workspace.agentLifecycleStatesByPanelId[panelId]?["codex"], .running)
+    }
+
+    @MainActor
+    func testToolActivityMarksTheTabRunning() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+
+        workspace.noteAgentToolActivity(source: "codex", panelId: panelId)
+        XCTAssertEqual(workspace.agentLifecycleStatesByPanelId[panelId]?["codex"], .running)
+
+        workspace.setAgentLifecycle(key: "claude_code", panelId: panelId, lifecycle: .needsInput)
+        workspace.noteAgentToolActivity(source: "claude", panelId: panelId)
+        XCTAssertEqual(workspace.agentLifecycleStatesByPanelId[panelId]?["claude_code"], .running)
+    }
+
+    @MainActor
+    func testStalePerAgentStatusRowsNeverOutliveTheLifecycle() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+        workspace.recordAgentPID(key: "claude_code.one", pid: 4243, panelId: panelId, refreshPorts: false)
+        workspace.statusEntries["claude_code"] = SidebarStatusEntry(key: "claude_code", value: "Claude needs input", icon: "bell.fill", priority: 100)
+        workspace.statusEntries["deploy"] = SidebarStatusEntry(key: "deploy", value: "deploying")
+
+        let values = workspace.sidebarStatusEntriesVisibleForDisplay().map(\.value)
+        XCTAssertFalse(values.contains("Claude needs input"), "\(values)")
+        XCTAssertTrue(values.contains("deploying"))
+    }
+}

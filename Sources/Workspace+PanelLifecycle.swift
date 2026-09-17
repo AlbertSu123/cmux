@@ -39,6 +39,35 @@ extension Workspace {
         }
     }
 
+    /// A tab the user is looking at no longer "needs input". The hooks report
+    /// Claude's idle nag as a question and nothing else ever answers it, so
+    /// viewing the tab is what settles it; a real permission prompt reasserts
+    /// itself through the next hook event if it is still pending.
+    func settleViewedAgentLifecycle(panelId: UUID) {
+        guard let states = agentLifecycleStatesByPanelId[panelId] else { return }
+        for (key, lifecycle) in states
+        where lifecycle == .needsInput && !AgentHibernationLifecycleStatusKeys.isManualKey(key) {
+            setAgentLifecycle(key: key, panelId: panelId, lifecycle: .idle)
+        }
+    }
+
+    /// A tool call is proof the agent is mid-turn, even when the prompt that
+    /// started the turn predates this process (a relaunch) and no hook ever
+    /// reported it. Idle and needs-input yield to it; a running tab stays.
+    func noteAgentToolActivity(source: String, panelId: UUID) {
+        guard panels[panelId] != nil else { return }
+        let key = FeedCoordinator.lifecycleStatusKey(forSource: source)
+        guard agentLifecycleStatesByPanelId[panelId]?[key] != .running else { return }
+        setAgentLifecycle(key: key, panelId: panelId, lifecycle: .running)
+    }
+
+    /// The continuation prompt for a startup-restored tab whose agent was
+    /// mid-turn at quit, handed out exactly once.
+    func takeInterruptedTurnContinuationPrompt(panelId: UUID) -> String? {
+        guard panelsResumingInterruptedTurn.remove(panelId) != nil else { return nil }
+        return AgentResumeContinuation.prompt
+    }
+
     /// Panels with at least one coding agent mid-turn. Manual loaders are the
     /// sidebar's own spinner namespace and never count as an agent.
     static func panelsWithRunningAgents(

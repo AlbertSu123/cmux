@@ -687,7 +687,10 @@ extension Workspace {
                 textBoxDraft: terminalPanel.sessionTextBoxDraftSnapshot(),
                 isRemoteTerminal: activeRemoteTerminalSurfaceIds.contains(panelId),
                 remotePTYSessionID: remotePTYSessionIDForSnapshot(panelId: panelId),
-                wasAgentRunning: agentWasRunning
+                wasAgentRunning: agentWasRunning,
+                wasAgentMidTurn: Self.panelsWithRunningAgents(
+                    [panelId: agentLifecycleStatesByPanelId[panelId] ?? [:]]
+                ).contains(panelId)
             )
             browserSnapshot = nil
             markdownSnapshot = nil
@@ -1758,6 +1761,13 @@ extension Workspace {
                     sessionId: restorableAgent.sessionId
                 )
             }()
+            // A tab that was mid-turn at quit gets its resume prompt topped
+            // with a continuation, so the interrupted work picks back up
+            // instead of waiting at the prompt for someone to type "continue".
+            if shouldAutoResumeAgent, restorableAgentCanAutoResume, restoredHibernation == nil,
+               snapshot.terminal?.wasAgentMidTurn == true {
+                panelsResumingInterruptedTurn.insert(snapshot.id)
+            }
             let restoredAgentResumeLaunch: SurfaceResumeStartupLaunch? =
                 if shouldAutoResumeAgent && restorableAgentCanAutoResume,
                    restoredHibernation == nil && restoredBindingLaunch == nil
@@ -3086,6 +3096,9 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
     var deferredAgentResumeRestoresByPanelId: [UUID: DeferredAgentResumeRestore] = [:]
     var deferredAgentResumeClaimsByPanelId: [UUID: (kind: String, sessionId: String)] = [:]
     var deferredAgentResumeIndexTask: Task<Void, Never>?
+    /// Panels whose agent was mid-turn when the last session was saved; each
+    /// is consumed once by the startup restore that hands the CLI its record.
+    var panelsResumingInterruptedTurn: Set<UUID> = []
     enum RestoredAgentResumeState: Equatable {
         case manualResumeAvailable, awaitingAutoResumeCommand, autoResumeCommandRunning, observedAgentCommandRunning, completedAgentExit
     }
@@ -11198,6 +11211,9 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
         )
 #endif
         guard let tabId = surfaceIdFromPanelId(panelId) else { return }
+        if AppFocusState.isAppFocused() {
+            settleViewedAgentLifecycle(panelId: panelId)
+        }
         // A browser restored lazily has the same Bonsplit tab identity as its
         // eventual live panel. Materialize it before focus routing asks AppKit
         // for a WebView/first-responder target.

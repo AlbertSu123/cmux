@@ -14,6 +14,7 @@ extension CMUXCLI {
         let preparedArgumentsWorkingDirectory: String?
         let permissionMode: String?
         let legacyCommand: String?
+        let continuationPrompt: String?
 
         func repairingHermesCheckpoint(
             _ checkpointID: String,
@@ -30,7 +31,8 @@ extension CMUXCLI {
                 preparedArguments: nil,
                 preparedArgumentsWorkingDirectory: nil,
                 permissionMode: permissionMode,
-                legacyCommand: legacyCommand
+                legacyCommand: legacyCommand,
+                continuationPrompt: continuationPrompt
             )
         }
     }

@@ -105,6 +105,12 @@ extension TerminalController {
 
         var pendingPiPostToolEvent: WorkstreamEvent?
         for event in events {
+            if event.hookEventName == .preToolUse,
+               let workspaceId = event.workspaceId.flatMap(UUID.init(uuidString:)),
+               let panelId = event.surfaceId.flatMap(UUID.init(uuidString:)) {
+                AppDelegate.shared?.workspaceFor(tabId: workspaceId)?
+                    .noteAgentToolActivity(source: event.source, panelId: panelId)
+            }
             if event.source == "pi", event.hookEventName == .postToolUse {
                 if pendingPiPostToolEvent?.sessionId == event.sessionId {
                     pendingPiPostToolEvent = event

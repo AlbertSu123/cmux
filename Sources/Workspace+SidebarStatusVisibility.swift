@@ -37,12 +37,17 @@ extension Workspace {
                 countedKeys.insert(key)
             }
         }
-        guard runningTabs > 0 || needsInputTabs > 0 else { return entries }
-
+        // Per-agent "Running" / "needs input" rows are fully represented by
+        // the counted rows, so they never linger after the lifecycle moved on.
         let agentEntries = entries.filter { AgentHibernationLifecycleStatusKeys.allowedStatusKeys.contains($0.key) }
         var result = entries.filter { entry in
-            !countedKeys.contains(entry.key) || entry.icon == Self.agentErrorStatusIcon
+            guard AgentHibernationLifecycleStatusKeys.allowedStatusKeys.contains(entry.key) else { return true }
+            if entry.icon == Self.agentErrorStatusIcon { return true }
+            if Self.countedAgentStatusIcons.contains(entry.icon ?? "") { return false }
+            return !countedKeys.contains(entry.key)
         }
+        guard runningTabs > 0 || needsInputTabs > 0 else { return result }
+
         let timestamp = agentEntries.map(\.timestamp).max() ?? Date()
         if needsInputTabs > 0 {
             result.append(SidebarStatusEntry(
@@ -71,6 +76,7 @@ extension Workspace {
     static let countedNeedsInputStatusKey = "cmux.agents.needsInput"
     /// The icon and color the hook CLI uses for agent status rows.
     private static let agentErrorStatusIcon = "exclamationmark.triangle.fill"
+    private static let countedAgentStatusIcons: Set<String> = ["bolt.fill", "bell.fill"]
     private static let agentStatusColor = "#4C8DFF"
 
     private func shouldDisplaySidebarStatusEntry(

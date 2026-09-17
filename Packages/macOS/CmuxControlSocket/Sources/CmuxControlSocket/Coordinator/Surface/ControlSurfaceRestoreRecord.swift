@@ -26,6 +26,9 @@ public struct ControlSurfaceRestoreRecord: Sendable, Equatable {
     public let permissionMode: String?
     /// Compatibility shell input retained for records persisted by older builds.
     public let legacyCommand: String?
+    /// An opening prompt the CLI appends to the resume invocation, used when
+    /// the agent was mid-turn at quit so it continues instead of waiting.
+    public let continuationPrompt: String?
 
     /// Creates the structured restore record transported to `cmux restore`.
     ///
@@ -52,7 +55,8 @@ public struct ControlSurfaceRestoreRecord: Sendable, Equatable {
         preparedArguments: [String]?,
         preparedArgumentsWorkingDirectory: String?,
         permissionMode: String?,
-        legacyCommand: String?
+        legacyCommand: String?,
+        continuationPrompt: String? = nil
     ) {
         self.modeRawValue = modeRawValue
         self.kind = kind
@@ -65,5 +69,6 @@ public struct ControlSurfaceRestoreRecord: Sendable, Equatable {
         self.preparedArgumentsWorkingDirectory = preparedArgumentsWorkingDirectory
         self.permissionMode = permissionMode
         self.legacyCommand = legacyCommand
+        self.continuationPrompt = continuationPrompt
     }
 }
