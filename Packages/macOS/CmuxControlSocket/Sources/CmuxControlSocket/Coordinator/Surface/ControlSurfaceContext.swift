@@ -263,6 +263,9 @@ public protocol ControlSurfaceContext: AnyObject {
     ///
     /// - Parameter routing: The routing selectors (with the surface-resume
     ///   precedence).
+    /// - Parameter launcherPID: The pid of a `cmux restore` process that will
+    ///   exec into the restored agent, so the host can own that agent process
+    ///   before the agent's own hooks (if any) report it.
     /// - Returns: The resume resolution.
     func controlSurfaceResumeGet(
         routing: ControlRoutingSelectors,
@@ -270,7 +273,8 @@ public protocol ControlSurfaceContext: AnyObject {
         hasResolvedWindowID: Bool,
         claimCheckpointID: String?,
         claimSource: String?,
-        claimUpdatedAt: Double?
+        claimUpdatedAt: Double?,
+        launcherPID: Int?
     ) -> ControlSurfaceResumeResolution
 
     /// Clears the resume binding for `surface.resume.clear`, honoring the optional

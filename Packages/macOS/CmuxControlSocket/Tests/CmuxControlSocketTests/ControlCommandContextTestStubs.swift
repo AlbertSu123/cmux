@@ -511,7 +511,8 @@ extension ControlSurfaceContext {
         hasResolvedWindowID: Bool,
         claimCheckpointID: String?,
         claimSource: String?,
-        claimUpdatedAt: Double?
+        claimUpdatedAt: Double?,
+        launcherPID: Int?
     ) -> ControlSurfaceResumeResolution { .surfaceNotFound }
 
     func controlSurfaceResumeClear(

@@ -13,6 +13,7 @@ final class FakeSurfaceControlCommandContext: ControlCommandContext {
         source: String?,
         updatedAt: Double?
     )?
+    var resumeGetLauncherPID: Int?
     var resumeClearExpectedUpdatedAt: Double?
     var resumeClearAgentSessionEnded: Bool?
     var resumeStrings = ControlSurfaceResumeStrings(
@@ -84,9 +85,11 @@ final class FakeSurfaceControlCommandContext: ControlCommandContext {
         hasResolvedWindowID: Bool,
         claimCheckpointID: String?,
         claimSource: String?,
-        claimUpdatedAt: Double?
+        claimUpdatedAt: Double?,
+        launcherPID: Int?
     ) -> ControlSurfaceResumeResolution {
         resumeGetClaim = (claimCheckpointID, claimSource, claimUpdatedAt)
+        resumeGetLauncherPID = launcherPID
         return resumeResolution
     }
 

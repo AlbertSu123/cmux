@@ -7872,3 +7872,45 @@ final class WorkspaceInterruptedTurnContinuationTests: XCTestCase {
         XCTAssertTrue(values.contains("deploying"))
     }
 }
+
+final class WorkspaceRestoreLauncherRegistrationTests: XCTestCase {
+    @MainActor
+    func testRestoreLauncherOwnsThePaneLikeAnAgentHookWould() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+        let target = ControlSurfaceResumeTarget.workspace(tabManager: manager, workspace: workspace, surfaceID: panelId)
+        XCTAssertFalse(workspace.suppressesRawTerminalNotification(panelId: panelId))
+
+        target.recordRestoreLauncher(pid: getpid(), agentKind: "codex")
+
+        XCTAssertTrue(workspace.suppressesRawTerminalNotification(panelId: panelId))
+        XCTAssertEqual(workspace.agentPIDs["codex"], getpid())
+    }
+
+    @MainActor
+    func testClaudeKindMapsToItsStatusKey() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+        let target = ControlSurfaceResumeTarget.workspace(tabManager: manager, workspace: workspace, surfaceID: panelId)
+
+        target.recordRestoreLauncher(pid: getpid(), agentKind: "claude")
+
+        XCTAssertEqual(workspace.agentPIDs["claude_code"], getpid())
+        XCTAssertTrue(workspace.suppressesRawTerminalNotification(panelId: panelId))
+    }
+
+    @MainActor
+    func testUnknownAgentKindsAreNotRegistered() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+        let target = ControlSurfaceResumeTarget.workspace(tabManager: manager, workspace: workspace, surfaceID: panelId)
+
+        target.recordRestoreLauncher(pid: getpid(), agentKind: "shell")
+
+        XCTAssertTrue(workspace.agentPIDs.isEmpty)
+        XCTAssertFalse(workspace.suppressesRawTerminalNotification(panelId: panelId))
+    }
+}

@@ -74,6 +74,8 @@ extension CMUXCLI {
             throw currentRestoreSurfaceUnknownError()
         }
 
+        // This process execs into the agent, so its pid is the agent's pid.
+        params["launcher_pid"] = Int(getpid())
         let payload = try client.sendV2(method: "surface.resume.get", params: params)
         guard let rawRecord = payload["restore_record"] as? [String: Any] else {
             throw loggedRestoreError(

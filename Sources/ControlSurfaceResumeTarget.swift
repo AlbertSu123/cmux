@@ -705,7 +705,8 @@ extension TerminalController {
         hasResolvedWindowID: Bool,
         claimCheckpointID: String?,
         claimSource: String?,
-        claimUpdatedAt: Double?
+        claimUpdatedAt: Double?,
+        launcherPID: Int?
     ) -> ControlSurfaceResumeResolution {
         guard let tabManager = resolveTabManager(routing: routing) else {
             return .windowUnavailable
@@ -732,14 +733,16 @@ extension TerminalController {
         } else {
             claimSucceeded = nil
         }
-        return .result(
-            surfaceResumeSnapshot(
-                target: target,
-                binding: target.binding,
-                cleared: false,
-                claimSucceeded: claimSucceeded
-            )
+        let snapshot = surfaceResumeSnapshot(
+            target: target,
+            binding: target.binding,
+            cleared: false,
+            claimSucceeded: claimSucceeded
         )
+        if let launcherPID, let kind = snapshot.restoreRecord?.kind {
+            target.recordRestoreLauncher(pid: pid_t(launcherPID), agentKind: kind)
+        }
+        return .result(snapshot)
     }
 
     func controlSurfaceResumeClear(
@@ -778,6 +781,27 @@ extension TerminalController {
         }
         target.clearBinding(bindingForClear, agentSessionEnded: agentSessionEnded)
         return .result(surfaceResumeSnapshot(target: target, binding: target.binding, cleared: true))
+    }
+}
+
+extension ControlSurfaceResumeTarget {
+    /// Owns the restored agent's process from the moment `cmux restore` fetches
+    /// its record. The CLI execs into the agent, so its pid is the agent's pid,
+    /// and the usual exit watcher retires it. Hooks would register the same
+    /// key later, but Codex sends no SessionStart hook on resume, so until its
+    /// first turn nothing else tells the workspace a structured agent owns the
+    /// pane; its TUI re-emits the last turn's terminal notification on resume,
+    /// which must be suppressed like every other raw notification from an
+    /// agent-owned pane.
+    func recordRestoreLauncher(pid: pid_t, agentKind: String) {
+        let statusKey = FeedCoordinator.lifecycleStatusKey(forSource: agentKind)
+        guard AgentHibernationLifecycleStatusKeys.allowedStatusKeys.contains(statusKey) else { return }
+        switch self {
+        case .workspace(_, let workspace, let surfaceID):
+            _ = workspace.recordAgentPID(key: statusKey, pid: pid, panelId: surfaceID)
+        case .dock(_, let dock, let surfaceID):
+            _ = dock.recordAgentPID(key: statusKey, pid: pid, panelId: surfaceID)
+        }
     }
 }
 

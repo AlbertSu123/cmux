@@ -539,6 +539,39 @@ struct ControlCommandCoordinatorSurfaceTests {
         #expect(payload["resume_claimed"] == .bool(false))
     }
 
+    @Test func surfaceResumeGetForwardsTheLauncherPID() {
+        let context = FakeSurfaceControlCommandContext()
+        let coordinator = ControlCommandCoordinator(context: context)
+        let surfaceID = UUID()
+
+        _ = coordinator.handle(ControlRequest(
+            id: .int(1),
+            method: "surface.resume.get",
+            params: [
+                "surface_id": .string(surfaceID.uuidString),
+                "launcher_pid": .int(4242),
+            ]
+        ))
+        #expect(context.resumeGetLauncherPID == 4242)
+
+        _ = coordinator.handle(ControlRequest(
+            id: .int(2),
+            method: "surface.resume.get",
+            params: [
+                "surface_id": .string(surfaceID.uuidString),
+                "launcher_pid": .int(0),
+            ]
+        ))
+        #expect(context.resumeGetLauncherPID == nil, "A non-positive pid names no process")
+
+        _ = coordinator.handle(ControlRequest(
+            id: .int(3),
+            method: "surface.resume.get",
+            params: ["surface_id": .string(surfaceID.uuidString)]
+        ))
+        #expect(context.resumeGetLauncherPID == nil)
+    }
+
     @Test func surfaceResumeClearForwardsManagedSessionEndProvenance() {
         let context = FakeSurfaceControlCommandContext()
         let coordinator = ControlCommandCoordinator(context: context)

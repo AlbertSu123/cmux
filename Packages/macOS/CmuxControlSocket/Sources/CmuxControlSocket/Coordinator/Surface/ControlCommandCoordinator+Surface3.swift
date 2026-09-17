@@ -135,7 +135,8 @@ extension ControlCommandCoordinator {
                 hasResolvedWindowID: uuid(params, "window_id") != nil,
                 claimCheckpointID: claimCheckpointID,
                 claimSource: claimSource,
-                claimUpdatedAt: claimUpdatedAt
+                claimUpdatedAt: claimUpdatedAt,
+                launcherPID: int(params, "launcher_pid").flatMap { $0 > 0 ? $0 : nil }
             ) ?? .surfaceNotFound
         )
     }
