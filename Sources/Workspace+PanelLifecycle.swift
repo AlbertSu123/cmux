@@ -32,7 +32,42 @@ extension Workspace {
 
     var agentLifecycleStatesByPanelId: [UUID: [String: AgentHibernationLifecycleState]] {
         get { sidebarAgentRuntimeObservation.agentLifecycleStatesByPanelId }
-        set { sidebarAgentRuntimeObservation.setAgentLifecycleStatesByPanelId(newValue) }
+        set {
+            let previous = sidebarAgentRuntimeObservation.agentLifecycleStatesByPanelId
+            sidebarAgentRuntimeObservation.setAgentLifecycleStatesByPanelId(newValue)
+            syncTabAgentActivity(from: previous, to: newValue)
+        }
+    }
+
+    /// Panels with at least one coding agent mid-turn. Manual loaders are the
+    /// sidebar's own spinner namespace and never count as an agent.
+    static func panelsWithRunningAgents(
+        _ states: [UUID: [String: AgentHibernationLifecycleState]]
+    ) -> Set<UUID> {
+        Set(states.compactMap { panelId, statesByKey in
+            let isRunning = statesByKey.contains { key, lifecycle in
+                !AgentHibernationLifecycleStatusKeys.isManualKey(key) && lifecycle == .running
+            }
+            return isRunning ? panelId : nil
+        })
+    }
+
+    /// Terminal tabs show bonsplit's activity spinner while an agent on the
+    /// panel is running. Claude Code advertises a turn by rewriting the
+    /// terminal title; Codex and the other hook-driven agents do not, so the
+    /// lifecycle the hooks already report is the one signal that covers all of
+    /// them. Browser tabs own the flag for page loads and are left alone.
+    private func syncTabAgentActivity(
+        from previous: [UUID: [String: AgentHibernationLifecycleState]],
+        to next: [UUID: [String: AgentHibernationLifecycleState]]
+    ) {
+        let before = Self.panelsWithRunningAgents(previous)
+        let after = Self.panelsWithRunningAgents(next)
+        for panelId in before.symmetricDifference(after) {
+            guard panels[panelId] is TerminalPanel,
+                  let tabId = surfaceIdFromPanelId(panelId) else { continue }
+            bonsplitController.updateTab(tabId, isLoading: after.contains(panelId))
+        }
     }
 
     /// Returns exact-session runtime identities that still match their recorded process generation.

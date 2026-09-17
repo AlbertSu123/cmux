@@ -244,6 +244,29 @@ struct AgentHibernationTests {
 
     @MainActor
     @Test
+    func testRunningAgentShowsActivitySpinnerOnItsTerminalTab() throws {
+        let workspace = Workspace()
+        let panelId = try #require(workspace.focusedPanelId)
+        let tabId = try #require(workspace.surfaceIdFromPanelId(panelId))
+        expectFalse(workspace.bonsplitController.tab(tabId)?.isLoading ?? true)
+
+        workspace.setAgentLifecycle(key: "codex", panelId: panelId, lifecycle: .running)
+        expectTrue(workspace.bonsplitController.tab(tabId)?.isLoading ?? false)
+
+        workspace.setAgentLifecycle(key: "codex", panelId: panelId, lifecycle: .idle)
+        expectFalse(workspace.bonsplitController.tab(tabId)?.isLoading ?? true)
+
+        workspace.setAgentLifecycle(key: "manual:loader", panelId: panelId, lifecycle: .running)
+        expectFalse(workspace.bonsplitController.tab(tabId)?.isLoading ?? true)
+
+        workspace.setAgentLifecycle(key: "claude_code", panelId: panelId, lifecycle: .running)
+        expectTrue(workspace.bonsplitController.tab(tabId)?.isLoading ?? false)
+        expectTrue(workspace.clearAgentLifecycle(key: "claude_code", panelId: panelId))
+        expectFalse(workspace.bonsplitController.tab(tabId)?.isLoading ?? true)
+    }
+
+    @MainActor
+    @Test
     func testClearingAgentPIDByPanelClearsLifecycleWithoutOwnedPID() throws {
         let workspace = Workspace()
         let panelId = try #require(workspace.focusedPanelId)
