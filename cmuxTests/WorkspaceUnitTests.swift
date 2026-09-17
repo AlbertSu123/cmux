@@ -7767,3 +7767,37 @@ final class ExtensionWorktreePrototypeTests: XCTestCase {
         return output
     }
 }
+
+final class WorkspaceSidebarAgentStatusCountTests: XCTestCase {
+    @MainActor
+    func testAgentStatusRowsCountTabsPerState() throws {
+        let manager = TabManager()
+        let workspace = try XCTUnwrap(manager.selectedWorkspace)
+        let first = try XCTUnwrap(workspace.focusedPanelId)
+        let paneId = try XCTUnwrap(workspace.paneId(forPanelId: first))
+        let second = try XCTUnwrap(workspace.newTerminalSurface(inPane: paneId, focus: false, inheritWorkingDirectoryFallback: false)).id
+        let third = try XCTUnwrap(workspace.newTerminalSurface(inPane: paneId, focus: false, inheritWorkingDirectoryFallback: false)).id
+
+        workspace.recordAgentPID(key: "claude_code.one", pid: 4242, panelId: first, refreshPorts: false)
+        workspace.statusEntries["claude_code"] = SidebarStatusEntry(key: "claude_code", value: "Running", icon: "bolt.fill", color: "#4C8DFF")
+        workspace.statusEntries["codex"] = SidebarStatusEntry(key: "codex", value: "Codex needs input", icon: "bell.fill", priority: 100)
+        workspace.statusEntries["deploy"] = SidebarStatusEntry(key: "deploy", value: "deploying")
+        workspace.setAgentLifecycle(key: "claude_code", panelId: first, lifecycle: .running)
+        workspace.setAgentLifecycle(key: "claude_code", panelId: second, lifecycle: .running)
+        workspace.setAgentLifecycle(key: "codex", panelId: third, lifecycle: .needsInput)
+
+        let values = workspace.sidebarStatusEntriesVisibleForDisplay().map(\.value)
+
+        XCTAssertTrue(values.contains("x2 running"), "\(values)")
+        XCTAssertTrue(values.contains("x1 needs input"), "\(values)")
+        XCTAssertTrue(values.contains("deploying"), "Non-agent rows must pass through")
+        XCTAssertFalse(values.contains("Running"), "Per-agent rows are superseded by the counted row")
+        XCTAssertFalse(values.contains("Codex needs input"))
+
+        workspace.setAgentLifecycle(key: "claude_code", panelId: first, lifecycle: .idle)
+        workspace.setAgentLifecycle(key: "claude_code", panelId: second, lifecycle: .idle)
+        workspace.setAgentLifecycle(key: "codex", panelId: third, lifecycle: .idle)
+        let idleValues = workspace.sidebarStatusEntriesVisibleForDisplay().map(\.value)
+        XCTAssertFalse(idleValues.contains { $0.hasSuffix(" running") || $0.hasSuffix(" needs input") }, "\(idleValues)")
+    }
+}

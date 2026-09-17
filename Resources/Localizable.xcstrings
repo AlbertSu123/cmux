@@ -12,6 +12,28 @@
         }
       }
     },
+    "sidebar.agentStatus.needsInputCount": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "x%lld needs input"
+          }
+        }
+      }
+    },
+    "sidebar.agentStatus.runningCount": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "x%lld running"
+          }
+        }
+      }
+    },
     "sidebar.restart.button": {
       "extractionState": "manual",
       "localizations": {
