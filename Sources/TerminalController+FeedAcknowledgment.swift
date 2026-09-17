@@ -105,12 +105,7 @@ extension TerminalController {
 
         var pendingPiPostToolEvent: WorkstreamEvent?
         for event in events {
-            if event.hookEventName == .preToolUse,
-               let workspaceId = event.workspaceId.flatMap(UUID.init(uuidString:)),
-               let panelId = event.surfaceId.flatMap(UUID.init(uuidString:)) {
-                AppDelegate.shared?.workspaceFor(tabId: workspaceId)?
-                    .noteAgentToolActivity(source: event.source, panelId: panelId)
-            }
+            v2NoteAgentToolActivity(event)
             if event.source == "pi", event.hookEventName == .postToolUse {
                 if pendingPiPostToolEvent?.sessionId == event.sessionId {
                     pendingPiPostToolEvent = event
@@ -134,6 +129,18 @@ extension TerminalController {
         }
     }
 
+    /// A tool call proves the owning tab is mid-turn; the workspace lifecycle
+    /// otherwise only hears about turns from prompt-submit hooks, which a
+    /// turn that predates this process never sent.
+    @MainActor
+    func v2NoteAgentToolActivity(_ event: WorkstreamEvent) {
+        guard event.hookEventName == .preToolUse,
+              let workspaceId = event.workspaceId.flatMap(UUID.init(uuidString:)),
+              let panelId = event.surfaceId.flatMap(UUID.init(uuidString:)) else { return }
+        AppDelegate.shared?.workspaceFor(tabId: workspaceId)?
+            .noteAgentToolActivity(source: event.source, panelId: panelId)
+    }
+
     /// Publishes and inserts one Feed event from one authoritative live-target snapshot.
     nonisolated func v2IngestFeedEvent(
         _ event: WorkstreamEvent,
@@ -149,6 +156,7 @@ extension TerminalController {
             onAccepted: { authoritativeEvent in
                 self.v2MainSync {
                     self.agentChatTranscriptService?.noteHookEvent(authoritativeEvent)
+                    self.v2NoteAgentToolActivity(authoritativeEvent)
                 }
                 CmuxEventBus.shared.publishWorkstreamEvent(authoritativeEvent, phase: "received")
                 if !waitsForDecision {
