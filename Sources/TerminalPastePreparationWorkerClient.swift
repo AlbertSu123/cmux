@@ -63,6 +63,10 @@ struct TerminalPastePreparationWorkerClient: Sendable {
     func prepare(
         _ request: TerminalPastePreparationRequest
     ) async throws -> TerminalPastePreparationResult {
+        try Task.checkCancellation()
+        if let result = request.capturedPlainTextResult {
+            return result
+        }
         let workingDirectory = try makeWorkingDirectory()
         defer {
             try? FileManager.default.removeItem(at: workingDirectory)
