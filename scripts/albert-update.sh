@@ -115,6 +115,10 @@ plutil -replace CMUXSidebarExtensionPointIdentifier -string "${INSTALL_BUNDLE_ID
 # the version string alone does not move between builds.
 plutil -replace CMUXInstalledCommit -string "$SOURCE_COMMIT" "$PLIST"
 plutil -remove LSEnvironment "$PLIST" 2>/dev/null || true
+# The Debug build ships the hot-reload runtime, which crashes the installed app
+# on any change under ~/src/cmux or DerivedData (recursive os_unfair_lock in
+# InjectionLite). Keep it off in the installed copy; dev builds get it from Xcode.
+plutil -insert LSEnvironment -json '{"CMUX_HOT_RELOAD_DISABLED":"1"}' "$PLIST"
 plutil -remove SUFeedURL "$PLIST" 2>/dev/null || true
 plutil -replace SUEnableAutomaticChecks -bool false "$PLIST"
 

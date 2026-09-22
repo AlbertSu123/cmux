@@ -1902,6 +1902,37 @@ final class ClaudeHookSessionStore {
         }
     }
 
+    private func sameProcessGeneration(
+        _ record: ClaudeHookSessionRecord,
+        previousPID: Int,
+        pid: Int,
+        identity: (seconds: Int64, microseconds: Int64)?
+    ) -> Bool {
+        guard previousPID == pid else { return false }
+        guard let seconds = record.pidStartSeconds,
+              let microseconds = record.pidStartMicroseconds,
+              let identity else {
+            // The same numeric PID without a comparable start identity keeps
+            // its authority; PID reuse cannot be distinguished here.
+            return true
+        }
+        return (identity.seconds, identity.microseconds) == (seconds, microseconds)
+    }
+
+    /// Prompt turns are owned by the agent process that opened them. A hook
+    /// from a different process generation means the previous agent died
+    /// without reporting its Stop (cmux relaunch, crash, kill), so its open
+    /// turns can only be dead: never ancestors of a later prompt. Retiring
+    /// them keeps the new process's first prompt from being classified as a
+    /// nested subagent prompt, whose visible mutations are suppressed, which
+    /// left the pane showing idle while the agent worked.
+    private func retireOpenPromptTurns(_ record: inout ClaudeHookSessionRecord) {
+        let openTurns = activePromptTurnStack(from: record)
+        guard !openTurns.isEmpty || (record.activePromptDepth ?? 0) > 0 else { return }
+        markPromptTurnsTerminal(openTurns, on: &record)
+        setActivePromptTurnStack([], totalDepth: 0, on: &record)
+    }
+
     private func markPromptTurnTerminal(_ turnId: String, on record: inout ClaudeHookSessionRecord) {
         guard let normalizedTurnId = normalizeOptional(turnId) else { return }
         var terminalTurnIds = terminalPromptTurnStack(from: record)
@@ -1989,8 +2020,12 @@ final class ClaudeHookSessionStore {
         }
         if let pid {
             let previousPID = record.pid
+            let identity = processStartIdentity(pid: pid)
+            if let previousPID, !sameProcessGeneration(record, previousPID: previousPID, pid: pid, identity: identity) {
+                retireOpenPromptTurns(&record)
+            }
             record.pid = pid
-            if let identity = processStartIdentity(pid: pid) {
+            if let identity {
                 record.pidStartSeconds = identity.seconds
                 record.pidStartMicroseconds = identity.microseconds
             } else if previousPID != pid {
