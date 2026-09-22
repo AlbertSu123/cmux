@@ -12,6 +12,29 @@ import Testing
 @Suite("Terminal image transfer concurrency")
 struct TerminalImageTransferConcurrencyTests {
     @MainActor
+    @Test("file pasteboards retain generation validation instead of capturing their text label")
+    func filePasteboardDoesNotCaptureTextLabel() {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-file-snapshot-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("file:///tmp/example.txt", forType: .fileURL)
+        pasteboard.setString("example.txt", forType: .string)
+        let read = TerminalPasteboardReadRequest(pasteboard: pasteboard)
+        #expect(read.plainTextSnapshot == nil)
+        pasteboard.clearContents()
+        pasteboard.setString("replacement", forType: .string)
+        let result = TerminalPastePreparationOperation(
+            pasteboardService: GhosttyApp.terminalPasteboard
+        ).prepare(request: TerminalPastePreparationRequest(
+            pasteboard: read, mode: .paste, destination: .terminal
+        ))
+        guard case .terminal(.reject) = result else {
+            Issue.record("A changed file pasteboard must still be rejected")
+            return
+        }
+    }
+
+    @MainActor
     @Test("dictated plain text survives clipboard restoration before worker execution")
     func dictatedTextSurvivesClipboardRestoration() throws {
         let pasteboard = NSPasteboard(name: .init("cmux-tests-dictation-\(UUID().uuidString)"))
