@@ -12,6 +12,132 @@ import Testing
 @Suite("Terminal image transfer concurrency")
 struct TerminalImageTransferConcurrencyTests {
     @MainActor
+    @Test("file pasteboards retain generation validation instead of capturing their text label")
+    func filePasteboardDoesNotCaptureTextLabel() {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-file-snapshot-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("file:///tmp/example.txt", forType: .fileURL)
+        pasteboard.setString("example.txt", forType: .string)
+        let read = TerminalPasteboardReadRequest(pasteboard: pasteboard)
+        #expect(read.plainTextSnapshot == nil)
+        pasteboard.clearContents()
+        pasteboard.setString("replacement", forType: .string)
+        let result = TerminalPastePreparationOperation(
+            pasteboardService: GhosttyApp.terminalPasteboard
+        ).prepare(request: TerminalPastePreparationRequest(
+            pasteboard: read, mode: .paste, destination: .terminal
+        ))
+        guard case .terminal(.reject) = result else {
+            Issue.record("A changed file pasteboard must still be rejected")
+            return
+        }
+    }
+
+    @MainActor
+    @Test("dictated plain text survives clipboard restoration before worker execution")
+    func dictatedTextSurvivesClipboardRestoration() throws {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-dictation-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("dictated transcript", forType: .string)
+        let request = TerminalPastePreparationRequest(
+            pasteboard: TerminalPasteboardReadRequest(pasteboard: pasteboard),
+            mode: .paste,
+            destination: .terminal
+        )
+        // The dictation app restores the user's old clipboard after invoking Paste.
+        // Worker startup/queue delay must not discard an already accepted transcript.
+        pasteboard.clearContents()
+        pasteboard.setString("previous clipboard", forType: .string)
+        let transported = try JSONDecoder().decode(
+            TerminalPastePreparationRequest.self,
+            from: JSONEncoder().encode(request)
+        )
+        let result = TerminalPastePreparationOperation(
+            pasteboardService: GhosttyApp.terminalPasteboard
+        ).prepare(request: transported)
+        guard case .terminal(.insertText(let text)) = result else {
+            Issue.record("Accepted dictation was discarded when the clipboard was restored")
+            return
+        }
+        #expect(text == "dictated transcript")
+    }
+
+    @MainActor
+    @Test("clipboard history metadata does not discard dictated text")
+    func dictatedTextWithClipboardHistoryMetadata() throws {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-dictation-metadata-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("dictated transcript", forType: .string)
+        pasteboard.setString("com.openai.chat", forType: .init("org.nspasteboard.source"))
+        pasteboard.setString("", forType: .init("com.raycast.RestoredType"))
+        let request = TerminalPasteboardReadRequest(pasteboard: pasteboard)
+        pasteboard.clearContents()
+        pasteboard.setString("previous clipboard", forType: .string)
+        let result = TerminalPastePreparationOperation(
+            pasteboardService: GhosttyApp.terminalPasteboard
+        ).prepare(request: TerminalPastePreparationRequest(
+            pasteboard: request, mode: .paste, destination: .terminal
+        ))
+        guard case .terminal(.insertText(let text)) = result else {
+            Issue.record("Clipboard metadata caused the accepted transcript to be discarded")
+            return
+        }
+        #expect(text == "dictated transcript")
+    }
+
+    @MainActor
+    @Test("dictated text survives restoration before the paste task starts")
+    func dictatedTextSurvivesMainActorScheduling() async {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-dictation-task-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("dictated transcript", forType: .string)
+        let request = TerminalPasteboardReadRequest(pasteboard: pasteboard)
+        let operation = TerminalPastePreparationOperation(pasteboardService: GhosttyApp.terminalPasteboard)
+        let preparationService = TerminalImageTransferPreparationService(
+            operation: { operation.prepare(request: $0) },
+            cleanup: { _ in }
+        )
+        let paste = Task { @MainActor in
+            await preparationService.prepare(request: request, mode: .paste)
+        }
+        // The main actor cannot start the task until this event handler yields.
+        pasteboard.clearContents()
+        pasteboard.setString("previous clipboard", forType: .string)
+        guard case .insertText(let text) = await paste.value else {
+            Issue.record("The queued paste lost its event-time transcript")
+            return
+        }
+        #expect(text == "dictated transcript")
+    }
+
+    @Test("captured dictation does not require starting a helper process")
+    func capturedDictationDoesNotStartWorker() async throws {
+        // An unavailable executable makes any attempted helper launch fail.
+        let client = TerminalPastePreparationWorkerClient(
+            executableURL: URL(fileURLWithPath: "/nonexistent/cmux-dictation-test-worker"),
+            pasteboardService: GhosttyApp.terminalPasteboard
+        )
+        let request = TerminalPastePreparationRequest(
+            pasteboard: TerminalPasteboardReadRequest(
+                pasteboardName: "unused-captured-dictation",
+                changeCount: 0,
+                plainTextSnapshot: "dictated transcript"
+            ),
+            mode: .paste,
+            destination: .terminal
+        )
+        guard case .terminal(.insertText(let text)) = try await client.prepare(request) else {
+            Issue.record("Captured dictation should not depend on a helper process")
+            return
+        }
+        #expect(text == "dictated transcript")
+    }
+
+    @MainActor
     @Test("failure event streams finish when their probe is released")
     func failureProbeFinishesOnRelease() async {
         var probe: PastePreparationFailureProbe? = PastePreparationFailureProbe()
