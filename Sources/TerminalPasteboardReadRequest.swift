@@ -24,6 +24,9 @@ struct TerminalPasteboardReadRequest: Codable, Sendable {
         // Rich content, files, and promised media still use the isolated worker.
         let plainTypes: Set<NSPasteboard.PasteboardType> = [
             .string, NSPasteboard.PasteboardType("NSStringPboardType"),
+            // Clipboard managers add provenance, not another content payload.
+            NSPasteboard.PasteboardType("org.nspasteboard.source"),
+            NSPasteboard.PasteboardType("com.raycast.RestoredType"),
         ]
         let types = Set(pasteboard.types ?? [])
         var text: String?
