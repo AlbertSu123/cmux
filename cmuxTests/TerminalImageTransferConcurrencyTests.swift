@@ -12,6 +12,23 @@ import Testing
 @Suite("Terminal image transfer concurrency")
 struct TerminalImageTransferConcurrencyTests {
     @MainActor
+    @Test("promised plain text stays on the isolated worker path")
+    func promisedPlainTextIsNotCapturedSynchronously() {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-lazy-text-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let provider = PasteboardThreadSignalingDataProvider(
+            mainThreadData: Data("lazy text".utf8),
+            backgroundThreadData: Data("lazy text".utf8)
+        )
+        let item = NSPasteboardItem()
+        item.setDataProvider(provider, forTypes: [.string])
+        pasteboard.clearContents()
+        #expect(pasteboard.writeObjects([item]))
+        #expect(TerminalPasteboardReadRequest(pasteboard: pasteboard).plainTextSnapshot == nil)
+        withExtendedLifetime(provider) {}
+    }
+
+    @MainActor
     @Test("file pasteboards retain generation validation instead of capturing their text label")
     func filePasteboardDoesNotCaptureTextLabel() {
         let pasteboard = NSPasteboard(name: .init("cmux-tests-file-snapshot-\(UUID().uuidString)"))
