@@ -13,6 +13,16 @@ struct TerminalPastePreparationOperation: Sendable {
         request: TerminalPastePreparationRequest
     ) -> TerminalPastePreparationResult {
         let readRequest = request.pasteboard
+        if request.mode == .paste,
+           let text = readRequest.plainTextSnapshot,
+           let destination = request.destination {
+            switch destination {
+            case .terminal:
+                return .terminal(text.isEmpty ? .reject : .insertText(text))
+            case .composer:
+                return .composer(text.isEmpty ? .reject : .insertText(text))
+            }
+        }
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name(readRequest.pasteboardName)
         )
