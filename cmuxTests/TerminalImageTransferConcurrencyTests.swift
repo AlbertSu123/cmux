@@ -89,6 +89,32 @@ struct TerminalImageTransferConcurrencyTests {
     }
 
     @MainActor
+    @Test("dictated text survives restoration before the paste task starts")
+    func dictatedTextSurvivesMainActorScheduling() async {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-dictation-task-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("dictated transcript", forType: .string)
+        let request = TerminalPasteboardReadRequest(pasteboard: pasteboard)
+        let operation = TerminalPastePreparationOperation(pasteboardService: GhosttyApp.terminalPasteboard)
+        let preparationService = TerminalImageTransferPreparationService(
+            operation: { operation.prepare(request: $0) },
+            cleanup: { _ in }
+        )
+        let paste = Task { @MainActor in
+            await preparationService.prepare(request: request, mode: .paste)
+        }
+        // The main actor cannot start the task until this event handler yields.
+        pasteboard.clearContents()
+        pasteboard.setString("previous clipboard", forType: .string)
+        guard case .insertText(let text) = await paste.value else {
+            Issue.record("The queued paste lost its event-time transcript")
+            return
+        }
+        #expect(text == "dictated transcript")
+    }
+
+    @MainActor
     @Test("failure event streams finish when their probe is released")
     func failureProbeFinishesOnRelease() async {
         var probe: PastePreparationFailureProbe? = PastePreparationFailureProbe()
