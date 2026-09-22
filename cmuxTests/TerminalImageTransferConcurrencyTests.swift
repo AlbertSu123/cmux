@@ -12,6 +12,36 @@ import Testing
 @Suite("Terminal image transfer concurrency")
 struct TerminalImageTransferConcurrencyTests {
     @MainActor
+    @Test("dictated plain text survives clipboard restoration before worker execution")
+    func dictatedTextSurvivesClipboardRestoration() throws {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-dictation-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("dictated transcript", forType: .string)
+        let request = TerminalPastePreparationRequest(
+            pasteboard: TerminalPasteboardReadRequest(pasteboard: pasteboard),
+            mode: .paste,
+            destination: .terminal
+        )
+        // The dictation app restores the user's old clipboard after invoking Paste.
+        // Worker startup/queue delay must not discard an already accepted transcript.
+        pasteboard.clearContents()
+        pasteboard.setString("previous clipboard", forType: .string)
+        let transported = try JSONDecoder().decode(
+            TerminalPastePreparationRequest.self,
+            from: JSONEncoder().encode(request)
+        )
+        let result = TerminalPastePreparationOperation(
+            pasteboardService: GhosttyApp.terminalPasteboard
+        ).prepare(request: transported)
+        guard case .terminal(.insertText(let text)) = result else {
+            Issue.record("Accepted dictation was discarded when the clipboard was restored")
+            return
+        }
+        #expect(text == "dictated transcript")
+    }
+
+    @MainActor
     @Test("failure event streams finish when their probe is released")
     func failureProbeFinishesOnRelease() async {
         var probe: PastePreparationFailureProbe? = PastePreparationFailureProbe()
