@@ -114,6 +114,29 @@ struct TerminalImageTransferConcurrencyTests {
         #expect(text == "dictated transcript")
     }
 
+    @Test("captured dictation does not require starting a helper process")
+    func capturedDictationDoesNotStartWorker() async throws {
+        // An unavailable executable makes any attempted helper launch fail.
+        let client = TerminalPastePreparationWorkerClient(
+            executableURL: URL(fileURLWithPath: "/nonexistent/cmux-dictation-test-worker"),
+            pasteboardService: GhosttyApp.terminalPasteboard
+        )
+        let request = TerminalPastePreparationRequest(
+            pasteboard: TerminalPasteboardReadRequest(
+                pasteboardName: "unused-captured-dictation",
+                changeCount: 0,
+                plainTextSnapshot: "dictated transcript"
+            ),
+            mode: .paste,
+            destination: .terminal
+        )
+        guard case .terminal(.insertText(let text)) = try await client.prepare(request) else {
+            Issue.record("Captured dictation should not depend on a helper process")
+            return
+        }
+        #expect(text == "dictated transcript")
+    }
+
     @MainActor
     @Test("failure event streams finish when their probe is released")
     func failureProbeFinishesOnRelease() async {
