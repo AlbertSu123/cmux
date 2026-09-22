@@ -65,6 +65,30 @@ struct TerminalImageTransferConcurrencyTests {
     }
 
     @MainActor
+    @Test("clipboard history metadata does not discard dictated text")
+    func dictatedTextWithClipboardHistoryMetadata() throws {
+        let pasteboard = NSPasteboard(name: .init("cmux-tests-dictation-metadata-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("dictated transcript", forType: .string)
+        pasteboard.setString("com.openai.chat", forType: .init("org.nspasteboard.source"))
+        pasteboard.setString("", forType: .init("com.raycast.RestoredType"))
+        let request = TerminalPasteboardReadRequest(pasteboard: pasteboard)
+        pasteboard.clearContents()
+        pasteboard.setString("previous clipboard", forType: .string)
+        let result = TerminalPastePreparationOperation(
+            pasteboardService: GhosttyApp.terminalPasteboard
+        ).prepare(request: TerminalPastePreparationRequest(
+            pasteboard: request, mode: .paste, destination: .terminal
+        ))
+        guard case .terminal(.insertText(let text)) = result else {
+            Issue.record("Clipboard metadata caused the accepted transcript to be discarded")
+            return
+        }
+        #expect(text == "dictated transcript")
+    }
+
+    @MainActor
     @Test("failure event streams finish when their probe is released")
     func failureProbeFinishesOnRelease() async {
         var probe: PastePreparationFailureProbe? = PastePreparationFailureProbe()
