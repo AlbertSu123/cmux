@@ -62,7 +62,7 @@ extension AgentLaunchSanitizer {
             index += width
         }
 
-        return result
+        return collapsingRepeatedOptions(result, policy: policy)
     }
 
     /// Applies the Claude prompt trust boundary while preserving legacy positional behavior for every other policy.

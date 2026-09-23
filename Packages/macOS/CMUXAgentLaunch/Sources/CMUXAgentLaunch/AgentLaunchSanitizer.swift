@@ -35,6 +35,11 @@ public enum AgentLaunchSanitizer {
         /// Keeps scanning for top-level option tokens after prompt positionals; only Claude supports this replay boundary.
         var scansOptionsPastPositionals: Bool = false
         var skipClaudeHookSettings: Bool = false
+        /// Alias groups of single-value options the agent CLI rejects when
+        /// repeated. Captured argv can carry an option twice (a shell wrapper's
+        /// default plus the user's own, or a top-level flag plus the same flag on
+        /// the resume subcommand); replay keeps only the last occurrence.
+        var lastOccurrenceWinsOptions: [Set<String>] = []
     }
     /// Returns launch arguments with non-restorable agent resume/session artifacts removed.
     ///

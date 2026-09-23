@@ -203,7 +203,15 @@ extension AgentLaunchSanitizer {
             "--remote=",
             "--remote-auth-token-env="
         ],
-        resumeSubcommand: "resume"
+        resumeSubcommand: "resume",
+        lastOccurrenceWinsOptions: [
+            ["--sandbox", "-s"],
+            ["--ask-for-approval", "-a"],
+            ["--model", "-m"],
+            ["--profile", "-p"],
+            ["--cd", "-C"],
+            ["--local-provider"]
+        ]
     )
 
     static let piPolicy = Policy(
