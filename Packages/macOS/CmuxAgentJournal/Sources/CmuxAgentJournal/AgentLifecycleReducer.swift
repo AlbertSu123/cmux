@@ -92,7 +92,9 @@ public struct AgentLifecycleReducer: Sendable {
         case .turnStarted:
             return (.running, false)
         case .turnCompleted:
-            return (draft.pendingWork ? .running : .idle, false)
+            // A completed turn is the user's turn regardless of live background
+            // work; that work only informs hibernation, never the visible phase.
+            return (.idle, false)
         case .approvalRequested, .questionRequested, .planReviewRequested:
             return (.needsInput, false)
         case .errorReported:

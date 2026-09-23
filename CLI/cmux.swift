@@ -27581,9 +27581,11 @@ struct CMUXCLI {
                 }
 
                 // Whether this turn ended with unfinished background work (a running
-                // background task or a pending cron). Cached on the session record so
-                // the ~60s-later idle_prompt Notification can consult it, and forwarded
-                // to the app so it can suppress the done-ping until work truly drains.
+                // background task or a pending cron). The turn is over either way:
+                // the pane shows idle and the done-ping fires, because it is the
+                // user's turn. The flag is cached on the session record and journaled
+                // only so hibernation never tears down a pane whose agent still owns
+                // live background work.
                 let hasPendingBackgroundWork = hasActiveClaudeBackgroundWork(parsedInput)
 
                 // Update session with transcript summary and send completion notification.
@@ -27599,10 +27601,7 @@ struct CMUXCLI {
                         cwd: parsedInput.cwd,
                         transcriptPath: parsedInput.transcriptPath,
                         isRestorable: true,
-                        // Pending background work keeps the pane out of the
-                        // hibernatable .idle state so the planner cannot SIGTERM
-                        // a live task (mirrors the antigravity fullyIdle flip).
-                        agentLifecycle: hasPendingBackgroundWork ? .running : .idle,
+                        agentLifecycle: .idle,
                         lastSubtitle: completion?.subtitle,
                         lastBody: completion?.body,
                         hadPendingBackgroundWorkAtStop: hasPendingBackgroundWork,
@@ -27637,29 +27636,14 @@ struct CMUXCLI {
                     store: sessionStore,
                     telemetry: telemetry
                 )
-                if hasPendingBackgroundWork {
-                    // The turn ended but a background task or scheduled wakeup is
-                    // still live, so the pane is not idle — show it as still
-                    // running rather than the misleading "Idle". Reuse the shared
-                    // generic-agent status strings so the pill stays localized.
-                    try? setClaudeStatus(
-                        client: client,
-                        workspaceId: workspaceId,
-                        surfaceId: surfaceId,
-                        value: String(localized: "agent.generic.status.running", defaultValue: "Running"),
-                        icon: "bolt.fill",
-                        color: "#4C8DFF"
-                    )
-                } else {
-                    try? setClaudeStatus(
-                        client: client,
-                        workspaceId: workspaceId,
-                        surfaceId: surfaceId,
-                        value: String(localized: "agent.generic.notification.status.idle", defaultValue: "Idle"),
-                        icon: "pause.circle.fill",
-                        color: "#8E8E93"
-                    )
-                }
+                try? setClaudeStatus(
+                    client: client,
+                    workspaceId: workspaceId,
+                    surfaceId: surfaceId,
+                    value: String(localized: "agent.generic.notification.status.idle", defaultValue: "Idle"),
+                    icon: "pause.circle.fill",
+                    color: "#8E8E93"
+                )
                 if let completion {
                     let title = String(
                         localized: "cli.claude-hook.notification.title",
@@ -27670,7 +27654,7 @@ struct CMUXCLI {
                         subtitle: completion.subtitle,
                         body: completion.body,
                         meta: AgentHookNotifyCategory.turnComplete.metaSegment(
-                            pending: hasPendingBackgroundWork,
+                            pending: false,
                             agentKind: "claude",
                             isSubagent: isNestedAgentSession
                         )
@@ -27983,27 +27967,18 @@ struct CMUXCLI {
 
             // Classify the Notification so the app can gate it by user config.
             // `permission_prompt` = Claude is blocked on the user (always worth a
-            // ping); `idle_prompt` = the ~60s idle nag, which fires even while a
-            // background task runs — its payload lacks `background_tasks`, so read
-            // the pending flag cached by the most recent Stop.
+            // ping); `idle_prompt` = the ~60s idle nag. Live background work never
+            // makes a reminder pending: a Notification means it is the user's turn.
             let notificationType = parsedInput.rawObject.flatMap {
                 firstString(in: $0, keys: ["notification_type"])
             }
             let notifyCategory: AgentHookNotifyCategory
-            let notifyPending: Bool
+            let notifyPending = false
             switch notificationType {
             case "permission_prompt":
                 notifyCategory = .needsPermission
-                notifyPending = false
             case "idle_prompt":
                 notifyCategory = .idleReminder
-                // The cached Stop-time flag is not stale in practice: a completed
-                // background task re-invokes claude (new turn -> fresh Stop with
-                // empty background_tasks refreshes the cache before any later
-                // idle_prompt), and no fresh Stop means the work is still running,
-                // so pending=true is correct. Deliberately no freshness heuristic;
-                // permission_prompt is never gated by this flag.
-                notifyPending = (mappedSession?.hadPendingBackgroundWorkAtStop == true)
             default:
                 // No (or unknown) notification_type: fall back to the summarizer's
                 // cue classification so older clients still gate under the right
@@ -28011,25 +27986,16 @@ struct CMUXCLI {
                 switch classifiedSubtitle {
                 case "Permission":
                     notifyCategory = .needsPermission
-                    notifyPending = false
                 case "Waiting":
                     notifyCategory = .idleReminder
-                    notifyPending = (mappedSession?.hadPendingBackgroundWorkAtStop == true)
                 case "Completed":
                     notifyCategory = .turnComplete
-                    notifyPending = (mappedSession?.hadPendingBackgroundWorkAtStop == true)
                 default:
                     notifyCategory = .other
-                    notifyPending = false
                 }
             }
 
-            // An idle reminder while background work is still pending is not a
-            // real "waiting for input" state: the pane is still running (the Stop
-            // hook set it to Running) and the app suppresses this banner. Skip the
-            // "Needs input" pill/lifecycle so the idle nag can't undo the Running
-            // status; the app still gates the (tagged) notification itself.
-            let suppressNeedsInputState = (notifyCategory == .idleReminder && notifyPending)
+            let suppressNeedsInputState = false
 
             // `.other` means "ungated, always deliver" — identical to an untagged
             // payload, so don't put it on the wire: the app parser accepts only
@@ -35478,9 +35444,15 @@ export default CMUXSessionRestore;
                 )
             let antigravityHasActiveBackgroundWork = hasActiveAntigravityBackgroundWork()
             var hasActiveBackgroundWork = antigravityHasActiveBackgroundWork || codexHasActiveBackgroundWork
+            // Antigravity defines a stop with active work as an intermediate
+            // event whose real completion arrives at the later fullyIdle stop.
+            // Codex children are different: the parent turn is over and it is
+            // the user's turn, so the pane shows idle and the completion pings
+            // now; the live children only keep the pane out of hibernation.
+            let stopKeepsPaneRunning = antigravityHasActiveBackgroundWork
             let stopNotificationStatus: AgentHookNotificationStatus = (codexFailure == nil && antigravityFailure == nil) ? .idle : .error
             var lifecycleAfterStop: AgentHibernationLifecycleState = {
-                if hasActiveBackgroundWork && stopNotificationStatus == .idle {
+                if stopKeepsPaneRunning && stopNotificationStatus == .idle {
                     return .running
                 }
                 return stopNotificationStatus == .idle ? .idle : .needsInput
@@ -35592,7 +35564,7 @@ export default CMUXSessionRestore;
             if def.name == "codex" {
                 codexHasActiveBackgroundWork = (codexStopDecision?.activeChildCount ?? 0) > 0
                 hasActiveBackgroundWork = antigravityHasActiveBackgroundWork || codexHasActiveBackgroundWork
-                lifecycleAfterStop = hasActiveBackgroundWork && stopNotificationStatus == .idle
+                lifecycleAfterStop = stopKeepsPaneRunning && stopNotificationStatus == .idle
                     ? .running
                     : (stopNotificationStatus == .idle ? .idle : .needsInput)
                 staleIdleStopHasNewerRunningSession = lifecycleAfterStop == .idle &&
@@ -35625,7 +35597,6 @@ export default CMUXSessionRestore;
                 }
             }
             let suppressCompletionNotification = suppressVisibleMutations
-                || codexHasActiveBackgroundWork
             let cursorStopApprovalNotificationKeys: [String] = {
                 guard def.name == "cursor", !sessionId.isEmpty else { return [] }
                 return (try? store.clearCursorShellApprovals(
@@ -35664,15 +35635,13 @@ export default CMUXSessionRestore;
                                   pid: pid,
                                   launchCommand: resumeLaunchCommand,
                                   agentLifecycle: lifecycleAfterStop,
-                                  lastSubtitle: (def.name == "codex" && codexHasActiveBackgroundWork) ? nil : subtitle,
-                                  lastBody: (def.name == "codex" && codexHasActiveBackgroundWork) ? nil : body,
-                                  lastNotificationStatus: (def.name == "codex" && codexHasActiveBackgroundWork) ? nil : stopNotificationStatus,
+                                  lastSubtitle: subtitle,
+                                  lastBody: body,
+                                  lastNotificationStatus: stopNotificationStatus,
                                   updateLastNotificationStatus: true,
-                                  runtimeStatus: (hasActiveBackgroundWork && stopNotificationStatus == .idle) ? .running : runtimeStatus(for: stopNotificationStatus),
-                                  updateRuntimeStatus: true)
-                if def.name == "codex", codexHasActiveBackgroundWork {
-                    try? store.clearNotificationSummary(sessionId: sessionId)
-                }
+                                  runtimeStatus: (stopKeepsPaneRunning && stopNotificationStatus == .idle) ? .running : runtimeStatus(for: stopNotificationStatus),
+                                  updateRuntimeStatus: true,
+                                  hadPendingBackgroundWorkAtStop: hasActiveBackgroundWork)
                 publishAgentSurfaceResumeBinding(
                     client: client,
                     workspaceId: workspaceId,
@@ -35715,7 +35684,7 @@ export default CMUXSessionRestore;
             // would mark the dedupe fingerprint and swallow the real final ping.
             let shouldPublishStopNotification = def.publishesStopNotification
                 && !stopNotificationAlreadyRouted
-                && (!hasActiveBackgroundWork || stopNotificationStatus == .error)
+                && (!stopKeepsPaneRunning || stopNotificationStatus == .error)
             let hasGrokTranscriptContext = def.name == "grok" && normalizedHookValue(cwd) != nil
             let shouldPublishGrokStopFallbackNotification = def.name == "grok"
                 && stopNotificationStatus == .idle
@@ -35736,7 +35705,7 @@ export default CMUXSessionRestore;
                 // Tag successful turn-end pings; error alerts always deliver.
                 let stopMeta: String? = stopNotificationStatus == .idle
                     ? AgentHookNotifyCategory.turnComplete.metaSegment(
-                        pending: hasActiveBackgroundWork,
+                        pending: stopKeepsPaneRunning,
                         agentKind: def.name,
                         isSubagent: isNestedAgentSession
                     )
@@ -35821,7 +35790,7 @@ export default CMUXSessionRestore;
                             client: client
                         )
                     }
-                } else if hasActiveBackgroundWork {
+                } else if stopKeepsPaneRunning {
                     let runningStatus = String(localized: "agent.generic.status.running", defaultValue: "Running")
                     if def.name == "cursor" {
                         sendCursorCriticalCommand(

@@ -71,7 +71,11 @@ struct CodexTurnCompletionOwnershipTests {
     }
 
     @Test
-    func nativeChildrenKeepParentRunningUntilAllChildrenDrainThenNotifyOnce() throws {
+    func parentStopWithLiveChildrenCompletesTurnOnceAndChildrenDrainSilently() throws {
+        // The parent turn ending is the user's turn even while spawned children
+        // still run: the pane goes idle and the one completion fires now. The
+        // children only keep the pane out of hibernation; their drain and any
+        // later duplicate parent Stop publish nothing.
         let harness = try makeHarness(name: "codex-native-child-settlement")
         defer { harness.context.cleanup() }
 
@@ -88,108 +92,50 @@ struct CodexTurnCompletionOwnershipTests {
         try runFeedLifecycle(harness, event: "SubagentStart", id: "child-a")
         try runFeedLifecycle(harness, event: "SubagentStart", id: "child-b")
 
-        let beforePendingStop = harness.context.state.snapshot().count
+        let beforeParentStop = harness.context.state.snapshot().count
         try runHook(
             harness,
             subcommand: "stop",
             input: stopPayload(harness, turnId: "turn-1")
         )
-        let pendingCommands = Array(
-            harness.context.state.snapshot().dropFirst(beforePendingStop)
+        let parentStopCommands = Array(
+            harness.context.state.snapshot().dropFirst(beforeParentStop)
         )
         #expect(
-            !pendingCommands.contains { $0.hasPrefix("notify_target_async ") },
-            "A parent Stop with live children must not notify, even under an always-capable hook path: \(pendingCommands)"
+            parentStopCommands.filter { $0.hasPrefix("notify_target_async ") }.count == 1,
+            "A parent Stop with live children is the user's turn and must publish its completion once: \(parentStopCommands)"
         )
         #expect(
-            pendingCommands.contains { $0.hasPrefix("set_status codex Running ") },
-            "A parent Stop with live children must remain Running: \(pendingCommands)"
+            parentStopCommands.contains { $0.hasPrefix("set_status codex Idle ") },
+            "A parent Stop with live children must show the pane idle: \(parentStopCommands)"
         )
         #expect(
-            !pendingCommands.contains { $0.hasPrefix("set_status codex Idle ") },
-            "A pending parent Stop must not also mark the pane idle: \(pendingCommands)"
+            !parentStopCommands.contains { $0.hasPrefix("set_status codex Running ") },
+            "Live children must not keep the pane Running: \(parentStopCommands)"
         )
         #expect(
-            AgentJournalAppendCapture.captures(in: pendingCommands).contains {
+            AgentJournalAppendCapture.captures(in: parentStopCommands).contains {
                 $0.kind == "agent.turn.completed" && $0.pendingWork
             },
-            "The pending parent boundary must be journaled authoritatively: \(pendingCommands)"
+            "The live children must still be journaled on the completion boundary: \(parentStopCommands)"
         )
 
+        let beforeDrain = harness.context.state.snapshot().count
         try runFeedLifecycle(harness, event: "SubagentStop", id: "child-a")
-        let beforePartiallyDrainedStop = harness.context.state.snapshot().count
-        try runHook(
-            harness,
-            subcommand: "stop",
-            input: stopPayload(harness, turnId: "turn-1")
-        )
-        let partiallyDrainedCommands = Array(
-            harness.context.state.snapshot().dropFirst(beforePartiallyDrainedStop)
-        )
-        #expect(
-            !partiallyDrainedCommands.contains { $0.hasPrefix("notify_target_async ") },
-            "One remaining child must continue to suppress completion: \(partiallyDrainedCommands)"
-        )
-        #expect(
-            partiallyDrainedCommands.contains { $0.hasPrefix("set_status codex Running ") },
-            "One remaining child must keep the pane Running: \(partiallyDrainedCommands)"
-        )
-        #expect(
-            !partiallyDrainedCommands.contains { $0.hasPrefix("set_status codex Idle ") },
-            "One remaining child must not also mark the pane idle: \(partiallyDrainedCommands)"
-        )
-
-        let beforeFinalChildStop = harness.context.state.snapshot().count
         try runFeedLifecycle(harness, event: "SubagentStop", id: "child-b")
-        #expect(
-            waitForConditionBlocking(timeout: 5) {
-                let snapshot = harness.context.state.snapshot()
-                return snapshot.contains { $0.hasPrefix("notify_target_async ") }
-                    && snapshot.contains { $0.hasPrefix("set_status codex Idle ") }
-            },
-            "The persistent child-stop path must settle the pending parent turn: \(harness.context.state.snapshot())"
-        )
-        let finalCommands = Array(
-            harness.context.state.snapshot().dropFirst(beforeFinalChildStop)
-        )
-        let finalNotifications = finalCommands.filter {
-            $0.hasPrefix("notify_target_async ")
-        }
-        #expect(
-            finalNotifications.count == 1,
-            "The settled foreground turn must produce exactly one completion: \(finalCommands)"
-        )
-        #expect(
-            finalCommands.contains { $0.hasPrefix("set_status codex Idle ") },
-            "The settled foreground turn must become idle: \(finalCommands)"
-        )
-        #expect(
-            !finalCommands.contains { $0.hasPrefix("set_status codex Running ") },
-            "The settled foreground turn must not remain Running: \(finalCommands)"
-        )
-
-        // A parent Stop arriving after the detached child-stop settlement is a
-        // duplicate boundary and must not publish another completion or repaint
-        // the pane.
-        let beforeDuplicateStop = harness.context.state.snapshot().count
         try runHook(
             harness,
             subcommand: "stop",
             input: stopPayload(harness, turnId: "turn-1")
         )
-        let duplicateCommands = Array(
-            harness.context.state.snapshot().dropFirst(beforeDuplicateStop)
-        )
-        let cumulativeNotifications = harness.context.state.snapshot().filter {
-            $0.hasPrefix("notify_target_async ")
-        }
+        let laterCommands = Array(harness.context.state.snapshot().dropFirst(beforeDrain))
         #expect(
-            cumulativeNotifications.count == 1,
-            "A duplicate settled Stop must not publish a second completion: \(harness.context.state.snapshot())"
+            !laterCommands.contains { $0.hasPrefix("notify_target_async ") },
+            "Draining children and a duplicate parent Stop must not publish a second completion: \(laterCommands)"
         )
         #expect(
-            !duplicateCommands.contains { $0.hasPrefix("set_status codex Idle ") },
-            "A duplicate settled Stop must not repaint the pane idle: \(duplicateCommands)"
+            !laterCommands.contains { $0.hasPrefix("set_status codex Running ") },
+            "Draining children must not repaint the pane Running: \(laterCommands)"
         )
     }
 

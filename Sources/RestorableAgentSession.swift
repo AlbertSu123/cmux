@@ -976,6 +976,7 @@ struct RestorableAgentSessionIndex: Sendable {
         let terminationProcessIDs: Set<Int>
         let terminationProcessIdentities: [Int: AgentPIDProcessIdentity]
         let containsUnrelatedProcess: Bool
+        let hasLiveBackgroundWork: Bool
 
         /// Keeps older in-process fixtures source-compatible while callers that
         /// have persisted PID evidence can opt in explicitly.
@@ -992,7 +993,8 @@ struct RestorableAgentSessionIndex: Sendable {
             hibernationPanelProcessIDs: Set<Int>,
             terminationProcessIDs: Set<Int>,
             terminationProcessIdentities: [Int: AgentPIDProcessIdentity],
-            containsUnrelatedProcess: Bool
+            containsUnrelatedProcess: Bool,
+            hasLiveBackgroundWork: Bool = false
         ) {
             self.snapshot = snapshot
             self.lifecycle = lifecycle
@@ -1007,6 +1009,7 @@ struct RestorableAgentSessionIndex: Sendable {
             self.terminationProcessIDs = terminationProcessIDs
             self.terminationProcessIdentities = terminationProcessIdentities
             self.containsUnrelatedProcess = containsUnrelatedProcess
+            self.hasLiveBackgroundWork = hasLiveBackgroundWork
         }
     }
 
@@ -1423,6 +1426,9 @@ struct RestorableAgentSessionIndex: Sendable {
     func lifecycle(workspaceId: UUID, panelId: UUID) -> AgentHibernationLifecycleState? {
         entry(workspaceId: workspaceId, panelId: panelId)?.lifecycle
     }
+    func hasLiveBackgroundWork(workspaceId: UUID, panelId: UUID) -> Bool {
+        entry(workspaceId: workspaceId, panelId: panelId)?.hasLiveBackgroundWork ?? false
+    }
 
     func updatedAt(workspaceId: UUID, panelId: UUID) -> TimeInterval? {
         entry(workspaceId: workspaceId, panelId: panelId)?.updatedAt
@@ -1583,7 +1589,8 @@ struct RestorableAgentSessionIndex: Sendable {
                     currentPanelProcessIDs.contains($0.key)
                 },
                 containsUnrelatedProcess: (processLiveness == .running && entry.containsUnrelatedProcess) ||
-                    presentMismatchedProcess
+                    presentMismatchedProcess,
+                hasLiveBackgroundWork: entry.hasLiveBackgroundWork
             )
         }
 
@@ -2127,7 +2134,8 @@ struct RestorableAgentSessionIndex: Sendable {
                     // A saved hook PID proves liveness but cannot prove the
                     // surrounding pane is exclusive. Critical-pressure
                     // termination requires a fresh process-tree detection.
-                    containsUnrelatedProcess: liveProcessID != nil || presentMismatchedProcess
+                    containsUnrelatedProcess: liveProcessID != nil || presentMismatchedProcess,
+                    hasLiveBackgroundWork: effectiveRecord.hadPendingBackgroundWorkAtStop == true
                 )
                 if shouldReplaceHookEntry(
                     existing: hookCandidatesByPanelAndKind[panelKindKey],

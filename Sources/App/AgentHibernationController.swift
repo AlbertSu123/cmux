@@ -16,6 +16,7 @@ struct AgentHibernationRecord {
     let hasUnconfirmedTerminalInput: Bool
     let lastActivityAt: TimeInterval
     let isProtected: Bool
+    let hasLiveBackgroundWork: Bool
     let hasLiveProcess: Bool
     let containsUnrelatedProcess: Bool
     let panelProcessIDs: Set<Int>
@@ -31,6 +32,7 @@ struct AgentHibernationRecord {
         hasUnconfirmedTerminalInput: Bool,
         lastActivityAt: TimeInterval,
         isProtected: Bool,
+        hasLiveBackgroundWork: Bool = false,
         hasLiveProcess: Bool,
         containsUnrelatedProcess: Bool,
         panelProcessIDs: Set<Int>,
@@ -46,6 +48,7 @@ struct AgentHibernationRecord {
         self.hasUnconfirmedTerminalInput = hasUnconfirmedTerminalInput
         self.lastActivityAt = lastActivityAt
         self.isProtected = isProtected
+        self.hasLiveBackgroundWork = hasLiveBackgroundWork
         self.hasLiveProcess = hasLiveProcess
         self.containsUnrelatedProcess = containsUnrelatedProcess
         self.panelProcessIDs = panelProcessIDs
@@ -266,6 +269,7 @@ final class AgentHibernationController {
                 processSafetyAllowsHibernation: processSafetyAllowsHibernation,
                 isProtected: record.isProtected,
                 lifecycle: record.lifecycle,
+                hasLiveBackgroundWork: record.hasLiveBackgroundWork,
                 isTemporarilyUnableToProtect: unableToProtectMarkerApplies,
                 hasUnconfirmedTerminalInput: record.hasUnconfirmedTerminalInput,
                 lastActivityAt: effectiveLastActivityAt

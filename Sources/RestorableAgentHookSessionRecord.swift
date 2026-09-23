@@ -15,5 +15,9 @@ struct RestorableAgentHookSessionRecord: Codable, Sendable {
     var lastPermissionMode: String?
     var isRestorable: Bool?
     var agentLifecycle: AgentHibernationLifecycleState?
+    /// Whether the agent's last turn ended with background work still live
+    /// (a background task, scheduled wakeup, or child agent). The pane is idle
+    /// for display; hibernation must not tear that work down.
+    var hadPendingBackgroundWorkAtStop: Bool?
     var updatedAt: TimeInterval
 }

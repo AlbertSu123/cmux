@@ -325,13 +325,19 @@ final class CodexTurnLedger {
                 }
                 let active = self.activeChildCount(record)
                 if active > 0 {
+                    // The parent turn is over even while children run: it is the
+                    // user's turn, so this Stop owns the one completion. Children
+                    // still settle the pending turn for child accounting, but
+                    // their drain never publishes a second completion.
                     record.pendingTurns[key] = CodexTurnLedgerPending(turnID: Self.normalized(turnID ?? record.activeTurnID))
+                    let shouldNotify = !record.notifiedTurnIDs.contains(key)
+                    if claimNotification, shouldNotify { record.notifiedTurnIDs.append(key) }
                     decision = self.decision(
                         ownership: .foreground,
                         settlement: .pending,
                         activeChildCount: active,
                         turnID: Self.normalized(turnID ?? record.activeTurnID),
-                        shouldNotify: false
+                        shouldNotify: shouldNotify
                     )
                 } else if record.settledTurnIDs.contains(key) {
                     let shouldNotify = !record.notifiedTurnIDs.contains(key)

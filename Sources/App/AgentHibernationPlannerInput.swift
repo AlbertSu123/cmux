@@ -10,6 +10,9 @@ struct AgentHibernationPlannerInput: Sendable {
     let processSafetyAllowsHibernation: Bool
     let isProtected: Bool
     let lifecycle: AgentHibernationLifecycleState
+    /// The agent's last turn left background work live (a background task,
+    /// scheduled wakeup, or child agent). Idle for display, never torn down.
+    let hasLiveBackgroundWork: Bool
     let isTemporarilyUnableToProtect: Bool
     let hasUnconfirmedTerminalInput: Bool
     let lastActivityAt: TimeInterval
@@ -22,6 +25,7 @@ struct AgentHibernationPlannerInput: Sendable {
         processSafetyAllowsHibernation: Bool,
         isProtected: Bool,
         lifecycle: AgentHibernationLifecycleState,
+        hasLiveBackgroundWork: Bool = false,
         isTemporarilyUnableToProtect: Bool = false,
         hasUnconfirmedTerminalInput: Bool,
         lastActivityAt: TimeInterval
@@ -33,6 +37,7 @@ struct AgentHibernationPlannerInput: Sendable {
         self.processSafetyAllowsHibernation = processSafetyAllowsHibernation
         self.isProtected = isProtected
         self.lifecycle = lifecycle
+        self.hasLiveBackgroundWork = hasLiveBackgroundWork
         self.isTemporarilyUnableToProtect = isTemporarilyUnableToProtect
         self.hasUnconfirmedTerminalInput = hasUnconfirmedTerminalInput
         self.lastActivityAt = lastActivityAt

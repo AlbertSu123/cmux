@@ -169,6 +169,31 @@ struct AgentHibernationTests {
     }
 
     @Test
+    func testPlannerNeverSelectsPaneWithLiveBackgroundWork() {
+        // An agent whose last turn ended with background work still live shows
+        // idle (it is the user's turn) but must never be torn down.
+        let workspaceId = UUID()
+        let now: TimeInterval = 1_000
+        let idleWithBackgroundWork = AgentHibernationPanelKey(workspaceId: workspaceId, panelId: UUID())
+        let idleNewer = AgentHibernationPanelKey(workspaceId: workspaceId, panelId: UUID())
+        let settings = AgentHibernationSettings.Values(
+            enabled: true,
+            idleSeconds: 60,
+            maxLiveTerminals: 1,
+            confirmationSeconds: 5
+        )
+        let selected = AgentHibernationPlanner.selectedPanelKeys(
+            inputs: [
+                .init(key: idleWithBackgroundWork, hasRestorableAgent: true, isLive: true, processSafetyAllowsHibernation: true, isProtected: false, lifecycle: .idle, hasLiveBackgroundWork: true, hasUnconfirmedTerminalInput: false, lastActivityAt: now - 1_000),
+                .init(key: idleNewer, hasRestorableAgent: true, isLive: true, processSafetyAllowsHibernation: true, isProtected: false, lifecycle: .idle, hasUnconfirmedTerminalInput: false, lastActivityAt: now - 500),
+            ],
+            settings: settings,
+            now: now
+        )
+        expectEqual(selected, Set([idleNewer]))
+    }
+
+    @Test
     func testPlannerDoesNotSelectWhenUnderLiveLimit() {
         let key = AgentHibernationPanelKey(workspaceId: UUID(), panelId: UUID())
         let settings = AgentHibernationSettings.Values(

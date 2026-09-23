@@ -115,6 +115,7 @@ extension AppDelegate {
                             hasUnconfirmedTerminalInput: terminalInputAt > lifecycleChangeAt,
                             lastActivityAt: max(indexActivity, localActivity, createdAt),
                             isProtected: workspaceIsVisible && visiblePanelIds.contains(panelId),
+                            hasLiveBackgroundWork: index.hasLiveBackgroundWork(workspaceId: workspace.id, panelId: panelId),
                             hasLiveProcess: !panelProcessIDs.isEmpty,
                             containsUnrelatedProcess: processEntry?.containsUnrelatedProcess ?? false,
                             panelProcessIDs: processEntry?.hibernationPanelProcessIDs ?? [],

@@ -2,11 +2,13 @@ import Dispatch
 import Foundation
 import Testing
 
-/// Behavioral coverage for the agent-notification gating signal the Claude hook
-/// forwards to the app: the `notify_target_async` payload's `c=<category>;p=<0|1>`
-/// meta segment, and the `hadPendingBackgroundWorkAtStop` cache the idle_prompt
-/// path reads. Drives the real CLI against the mock socket server, exactly like
-/// `ClaudeNotificationStatusLifecycleTests`.
+/// Behavioral coverage for how the Claude hook treats a turn that ends with
+/// background work still live (a running background task or a scheduled
+/// wakeup). The turn is over and it is the user's turn: the pane shows Idle,
+/// the done-ping fires untagged, and idle reminders behave normally. The live
+/// work is only cached on the session record (`hadPendingBackgroundWorkAtStop`)
+/// and journaled so hibernation never tears it down. Drives the real CLI
+/// against the mock socket server, exactly like `ClaudeNotificationStatusLifecycleTests`.
 @Suite(.serialized)
 struct ClaudeBackgroundWorkNotifyTests {
     private func notifyLine(_ snapshot: [String], containing needle: String) -> String? {
@@ -73,26 +75,24 @@ struct ClaudeBackgroundWorkNotifyTests {
         return record["hadPendingBackgroundWorkAtStop"] as? Bool
     }
 
-    @Test func stopWithRunningBackgroundTaskTagsPendingAndCaches() throws {
+    @Test func stopWithRunningBackgroundTaskShowsIdleAndCachesProtection() throws {
         let session = "bg-running-session"
         let stdin = #"""
         {"session_id":"\#(session)","cwd":"/tmp/x","hook_event_name":"Stop","last_assistant_message":"ok","background_tasks":[{"id":"t1","type":"shell","status":"running","description":"build","command":"sleep 1"}],"session_crons":[]}
         """#
         let (snapshot, cached) = try runStopHook(name: "bg-run", sessionId: session, stdin: stdin)
         #expect(
-            notifyLine(snapshot, containing: "c=turn-complete;p=1") != nil,
-            "Stop with a running background task must tag the done-ping pending; saw \(snapshot)"
+            notifyLine(snapshot, containing: "c=turn-complete;p=0") != nil,
+            "A turn that ends with a background task still running is the user's turn; the done-ping must fire untagged; saw \(snapshot)"
         )
+        // The live work is cached only so hibernation leaves the pane alone.
         #expect(cached == true)
-        // Sidebar pill must not say "Idle" while background work is live.
-        #expect(statusLine(snapshot, value: "Running") != nil,
-                "Pending stop must show a Running pill, not Idle; saw \(snapshot)")
-        #expect(statusLine(snapshot, value: "Idle") == nil)
-        // And the journaled turn boundary must carry pending_work=true so the
-        // reduced lifecycle stays running (non-hibernatable) while the
-        // background task is live.
+        #expect(statusLine(snapshot, value: "Idle") != nil,
+                "The pane must show Idle once it is the user's turn; saw \(snapshot)")
+        #expect(statusLine(snapshot, value: "Running") == nil)
+        // The journaled boundary still records the live work as a fact.
         #expect(journalEvent(snapshot, kind: "agent.turn.completed", pendingWork: true) != nil,
-                "Pending stop must journal a pending turn completion; saw \(snapshot)")
+                "Live background work must be journaled on the turn completion; saw \(snapshot)")
         #expect(journalEvent(snapshot, kind: "agent.turn.completed", pendingWork: false) == nil)
     }
 
@@ -114,14 +114,16 @@ struct ClaudeBackgroundWorkNotifyTests {
                 "Truly-idle stop must journal a non-pending turn completion; saw \(snapshot)")
     }
 
-    @Test func stopWithPendingCronTagsPending() throws {
+    @Test func stopWithPendingCronStillCompletesTurn() throws {
         let session = "bg-cron-session"
         let stdin = #"""
         {"session_id":"\#(session)","cwd":"/tmp/x","hook_event_name":"Stop","last_assistant_message":"ok","background_tasks":[],"session_crons":[{"id":"c1"}]}
         """#
-        let (snapshot, _) = try runStopHook(name: "bg-cron", sessionId: session, stdin: stdin)
-        #expect(notifyLine(snapshot, containing: "c=turn-complete;p=1") != nil,
-                "A pending scheduled wakeup must tag pending=1; saw \(snapshot)")
+        let (snapshot, cached) = try runStopHook(name: "bg-cron", sessionId: session, stdin: stdin)
+        #expect(notifyLine(snapshot, containing: "c=turn-complete;p=0") != nil,
+                "A pending scheduled wakeup does not make the turn pending; saw \(snapshot)")
+        #expect(cached == true)
+        #expect(statusLine(snapshot, value: "Idle") != nil)
     }
 
     @Test func stopWithoutBackgroundKeysOldClientTagsNotPending() throws {
@@ -196,9 +198,10 @@ struct ClaudeBackgroundWorkNotifyTests {
                 "Permission-cue notification without notification_type must tag needs-permission; saw \(context.state.snapshot())")
     }
 
-    @Test func idlePromptAfterPendingStopReadsCachedPending() throws {
-        // Stop (pending) then idle_prompt on the SAME session: the idle nag must
-        // inherit the cached pending flag because its payload lacks background_tasks.
+    @Test func idlePromptAfterPendingStopIsANormalReminder() throws {
+        // Stop with live background work, then idle_prompt on the SAME session:
+        // the reminder means it is the user's turn, so it is neither tagged
+        // pending nor suppressed.
         let session = "idle-after-pending"
         let harness = ClaudeHookSurfaceResolutionSwiftTests()
         let context = try harness.makeClaudeHookContext(name: "idle-pending")
@@ -236,18 +239,12 @@ struct ClaudeBackgroundWorkNotifyTests {
         #expect(handled.wait(timeout: .now() + 5) == .success)
         harness.assertSuccessfulHook(notifResult)
         let snapshot = context.state.snapshot()
-        #expect(notifyLine(snapshot, containing: "c=idle-reminder;p=1") != nil,
-                "idle_prompt after a pending stop must inherit pending=1; saw \(snapshot)")
-        // A pending idle reminder must not flip the pane to "Needs input": the
-        // banner is suppressed app-side and the pane is still Running.
-        #expect(statusLine(snapshot, value: "Needs input") == nil,
-                "Pending idle_prompt must not set a Needs input pill; saw \(snapshot)")
-        // And the journal must record it as an observation, never as a
-        // needs-input question, so the reduced lifecycle stays running.
-        #expect(journalEvent(snapshot, kind: "agent.question.requested") == nil,
-                "Pending idle_prompt must not journal a needs-input question; saw \(snapshot)")
-        #expect(journalEvent(snapshot, kind: "agent.state.changed") != nil,
-                "Pending idle_prompt must still journal an observation; saw \(snapshot)")
+        #expect(notifyLine(snapshot, containing: "c=idle-reminder;p=0") != nil,
+                "idle_prompt after a stop with live background work is a normal reminder; saw \(snapshot)")
+        #expect(statusLine(snapshot, value: "Needs input") != nil,
+                "idle_prompt must set the Needs input pill; saw \(snapshot)")
+        #expect(journalEvent(snapshot, kind: "agent.question.requested") != nil,
+                "idle_prompt must journal a needs-input question; saw \(snapshot)")
     }
 
     @Test func idlePromptAfterIdleStopTagsNotPending() throws {
