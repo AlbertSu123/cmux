@@ -490,6 +490,10 @@ extension Workspace {
         // exited. Preserve automatic ownership until a completed scan can
         // establish liveness (or an explicit lifecycle event retires it).
         guard let liveIndex else { return false }
+        // An index still incomplete for this panel (its Codex verification
+        // pending or unavailable) is unknown evidence too. Retiring on it would
+        // turn one transient lookup failure into a permanently manual tab.
+        guard liveIndex.isComplete(forPanelId: panelId, kind: kind) else { return false }
         guard !liveIndex.hasAmbiguousPanel(panelId) else { return false }
         // A recorded PID with unknown cached liveness is inconclusive, not an
         // exited session. Preserve the automatic binding until a later scan
@@ -618,7 +622,9 @@ extension Workspace {
         deferredAgentResumeRestoresByPanelId[panelId] = restore
         guard deferredAgentResumeIndexTask == nil else { return }
         deferredAgentResumeIndexTask = Task { @MainActor [weak self] in
-            await AgentRestoreAdmissionRetry.run { [weak self] in
+            await AgentRestoreAdmissionRetry.run(
+                maximumAttempts: AgentRestoreAdmissionRetry.startupIndexSettleMaximumAttempts
+            ) { [weak self] in
                 guard let self, !self.deferredAgentResumeRestoresByPanelId.isEmpty else {
                     return true
                 }

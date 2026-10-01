@@ -1,5 +1,8 @@
 import Foundation
+import os
 import SQLite3
+
+private let verifierLogger = Logger(subsystem: "com.cmuxterm.agent-launch", category: "CodexResumeVerifier")
 
 /// Verifies exact Codex resume identifiers against `state_5.sqlite` and rollout
 /// JSONL files under the effective CODEX_HOME.
@@ -159,7 +162,7 @@ public struct CodexSessionResumeVerifier: Sendable {
                             threadSource: nil
                         ))
                     } else if scan.sawUnavailable {
-                        results[index] = .unavailable
+                        results[index] = unavailable("legacy-scan-unavailable", sessionId: request.sessionId)
                     }
                 }
             }
@@ -173,7 +176,7 @@ public struct CodexSessionResumeVerifier: Sendable {
             fileManager: fileManager
         ) else {
             for index in verificationRequests.indices where !verificationRequests[index].sessionId.isEmpty {
-                results[index] = .unavailable
+                results[index] = unavailable("index-unreadable", sessionId: verificationRequests[index].sessionId)
             }
             return results
         }
@@ -196,11 +199,15 @@ public struct CodexSessionResumeVerifier: Sendable {
                         indexedSource: thread.indexedSource,
                         threadSource: thread.threadSource
                     ))
-                case .unavailable, .metadata, .readableWithoutMetadata:
+                case .unavailable:
+                    results[index] = unavailable("rollout-unreadable", sessionId: request.sessionId, path: thread.rolloutPath)
+                case .metadata:
                     // An indexed row is authoritative. Never accept weaker
                     // transcript or legacy evidence after it fails identity
                     // validation.
-                    results[index] = .unavailable
+                    results[index] = unavailable("rollout-identity-mismatch", sessionId: request.sessionId, path: thread.rolloutPath)
+                case .readableWithoutMetadata:
+                    results[index] = unavailable("rollout-without-metadata", sessionId: request.sessionId, path: thread.rolloutPath)
                 }
             case .threadMissing:
                 if let transcriptPath = request.transcriptPath,
@@ -215,14 +222,14 @@ public struct CodexSessionResumeVerifier: Sendable {
                 } else if !readBudget.hasRemainingBytes {
                     // A shared budget exhaustion is an inconclusive read, not
                     // evidence that this indexed-missing thread is absent.
-                    results[index] = .unavailable
+                    results[index] = unavailable("read-budget-exhausted", sessionId: request.sessionId)
                 } else if allowLegacyFallbackForIndexedMissing {
                     indexedMissingSessionIDs.insert(request.sessionId)
                 }
             case .databaseMissing, .unavailable:
                 // The database existed when the batch started, so a race
                 // that removes it or makes it unreadable is unavailable.
-                results[index] = .unavailable
+                results[index] = unavailable("index-row-unreadable", sessionId: request.sessionId)
             }
         }
         if allowLegacyFallbackForIndexedMissing, !indexedMissingSessionIDs.isEmpty {
@@ -246,11 +253,31 @@ public struct CodexSessionResumeVerifier: Sendable {
                         threadSource: nil
                     ))
                 } else if scan.sawUnavailable {
-                    results[index] = .unavailable
+                    results[index] = unavailable("legacy-fallback-unavailable", sessionId: request.sessionId)
                 }
             }
         }
         return results
+    }
+
+    /// Every inconclusive verdict names its cause in the unified log, so a
+    /// tab left at a shell after a relaunch can be explained after the fact.
+    private func unavailable(
+        _ reason: StaticString,
+        sessionId: String,
+        path: String? = nil
+    ) -> CodexSessionResumeVerification {
+        verifierLogger.error(
+            "Codex resume verification unavailable reason=\(reason, privacy: .public) session=\(sessionId.prefix(13), privacy: .public) path=\(path ?? "-", privacy: .private(mask: .hash))"
+        )
+        return .unavailable
+    }
+
+    private func logIndexFailure(_ stage: StaticString, database: OpaquePointer?, code: Int32) {
+        let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "no handle"
+        verifierLogger.error(
+            "Codex resume index \(stage, privacy: .public) failed rc=\(code, privacy: .public) message=\(message, privacy: .public)"
+        )
     }
 
     private struct IndexedThread {
@@ -276,12 +303,14 @@ public struct CodexSessionResumeVerifier: Sendable {
         guard fileManager.fileExists(atPath: databasePath) else { return nil }
 
         var database: OpaquePointer?
-        guard sqlite3_open_v2(
+        let openResult = sqlite3_open_v2(
             databasePath,
             &database,
             SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX,
             nil
-        ) == SQLITE_OK, let database else {
+        )
+        guard openResult == SQLITE_OK, let database else {
+            logIndexFailure("open", database: database, code: openResult)
             sqlite3_close(database)
             return nil
         }
@@ -323,6 +352,7 @@ public struct CodexSessionResumeVerifier: Sendable {
             )
         }
         guard prepareResult == SQLITE_OK, let statement else {
+            logIndexFailure("prepare", database: database, code: prepareResult)
             sqlite3_finalize(statement)
             return nil
         }
@@ -334,10 +364,14 @@ public struct CodexSessionResumeVerifier: Sendable {
             guard sqlite3_reset(statement) == SQLITE_OK,
                   sqlite3_clear_bindings(statement) == SQLITE_OK,
                   sqlite3_bind_text(statement, 1, sessionID, -1, transient) == SQLITE_OK else {
+                logIndexFailure("bind", database: database, code: sqlite3_errcode(database))
                 return nil
             }
             let step = sqlite3_step(statement)
-            guard step == SQLITE_ROW || step == SQLITE_DONE else { return nil }
+            guard step == SQLITE_ROW || step == SQLITE_DONE else {
+                logIndexFailure("step", database: database, code: step)
+                return nil
+            }
             guard step == SQLITE_ROW else {
                 results[sessionID] = .threadMissing
                 continue

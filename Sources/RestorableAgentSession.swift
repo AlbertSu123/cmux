@@ -952,6 +952,8 @@ struct SessionRestorableAgentSnapshot: Codable, Sendable {
 
 struct RestorableAgentSessionIndex: Sendable {
     static let empty = RestorableAgentSessionIndex(entriesByPanel: [:], isComplete: true)
+    /// An index whose scan has not settled: unknown evidence for every panel.
+    static let incomplete = RestorableAgentSessionIndex(entriesByPanel: [:], isComplete: false)
 
     struct PanelKey: Hashable, Sendable {
         let workspaceId: UUID

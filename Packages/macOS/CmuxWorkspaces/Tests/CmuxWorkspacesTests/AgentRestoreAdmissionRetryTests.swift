@@ -3,6 +3,13 @@ import Testing
 
 @MainActor
 struct AgentRestoreAdmissionRetryTests {
+    @Test func startupIndexSettleBudgetOutlastsCodexDatabaseContention() {
+        // About a minute at the default 500 ms pause: a Codex state database
+        // can stay locked for seconds around a relaunch, and the old six-second
+        // budget stranded every Codex tab at a shell.
+        #expect(AgentRestoreAdmissionRetry.startupIndexSettleMaximumAttempts >= 120)
+    }
+
     @Test func transientOwnershipIsRetriedUntilLaunchIsAdmitted() async {
         var scans = 0
         var launches = 0

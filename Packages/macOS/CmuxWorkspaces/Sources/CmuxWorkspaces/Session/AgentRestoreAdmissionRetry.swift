@@ -2,6 +2,13 @@
 /// Every attempt must perform its own fresh ownership and session-identity checks.
 @MainActor
 public enum AgentRestoreAdmissionRetry {
+    /// Attempts a deferred startup restore makes while the live agent index is
+    /// still settling (one attempt per `pause`, 500 ms by default, so about a
+    /// minute). Codex verification can stay unavailable for seconds while
+    /// other Codex processes hold its state database around a relaunch;
+    /// waiting costs nothing because nothing launches until the index is
+    /// complete, and giving up early strands the tab at a shell.
+    public static let startupIndexSettleMaximumAttempts = 120
     /// Retries an inconclusive admission without ever treating elapsed time as permission.
     /// Returns false on cancellation or exhaustion so the owner can retain manual restore.
     public static func run(

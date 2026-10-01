@@ -76,7 +76,38 @@ struct WorkspaceIsStaleAgentHookBindingTests {
         let panelId = try #require(workspace.focusedPanelId)
         let binding = Self.agentHookBinding(launchFlavor: .local)
 
-        #expect(workspace.isStaleAgentHookBinding(binding, panelId: panelId) == true)
+        // A settled index with no process for this panel is conclusive
+        // evidence; the process-wide shared index may still be loading.
+        #expect(
+            workspace.isStaleAgentHookBinding(
+                binding,
+                panelId: panelId,
+                restorableAgentIndex: .empty
+            ) == true
+        )
+    }
+
+    @Test
+    func incompleteIndexIsUnknownEvidenceNotStaleness() throws {
+        // A relaunch can leave the index incomplete for seconds while Codex
+        // verification is unavailable. Retiring on that would turn a transient
+        // lookup failure into a permanently manual tab.
+        let workspace = Workspace()
+        let panelId = try #require(workspace.focusedPanelId)
+        let binding = SurfaceResumeBindingSnapshot(
+            kind: "codex",
+            command: "codex resume 01a0f07f-8e16-7542-8137-06beddb05ffb",
+            checkpointId: "01a0f07f-8e16-7542-8137-06beddb05ffb",
+            source: "agent-hook"
+        )
+        let incompleteIndex = RestorableAgentSessionIndex.incomplete
+        #expect(
+            workspace.isStaleAgentHookBinding(
+                binding,
+                panelId: panelId,
+                restorableAgentIndex: incompleteIndex
+            ) == false
+        )
     }
 
     @Test

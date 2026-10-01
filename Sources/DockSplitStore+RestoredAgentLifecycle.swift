@@ -452,7 +452,9 @@ extension DockSplitStore {
         deferredAgentResumeRestoresByPanelId[panelId] = restore
         guard deferredAgentResumeIndexTask == nil else { return }
         deferredAgentResumeIndexTask = Task { @MainActor [weak self] in
-            await AgentRestoreAdmissionRetry.run { [weak self] in
+            await AgentRestoreAdmissionRetry.run(
+                maximumAttempts: AgentRestoreAdmissionRetry.startupIndexSettleMaximumAttempts
+            ) { [weak self] in
                 guard let self, !self.deferredAgentResumeRestoresByPanelId.isEmpty else {
                     return true
                 }

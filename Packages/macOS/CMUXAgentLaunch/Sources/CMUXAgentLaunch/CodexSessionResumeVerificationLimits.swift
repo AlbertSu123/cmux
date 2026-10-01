@@ -20,7 +20,7 @@ public struct CodexSessionResumeVerificationLimits: Sendable {
     /// every Codex terminal does while cmux relaunches. A reader with no busy
     /// handler sees that as `SQLITE_BUSY` and would report an existing session
     /// as unavailable; a short bounded wait keeps the read conclusive.
-    public static let indexBusyTimeoutMilliseconds: Int32 = 2_000
+    public static let indexBusyTimeoutMilliseconds: Int32 = 10_000
 
     /// Remaining aggregate rollout bytes in this budget.
     public private(set) var remainingBytes: Int
