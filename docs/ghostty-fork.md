@@ -1864,3 +1864,7 @@ These files change frequently upstream; be careful when rebasing the fork:
     `write_pty`.
 
 If you resolve a conflict, update this doc with what changed.
+
+## Albert VNC URL matching
+
+Albert's fork tracks `AlbertSu123/ghostty` branch `albert-vnc-links`. The explicit-scheme matcher also recognizes `vnc://`, using its existing host, IPv6, port, and punctuation handling. cmux routes these non-web URLs to the macOS system handler (Screen Sharing). Keep this scheme when updating the Ghostty pointer.
