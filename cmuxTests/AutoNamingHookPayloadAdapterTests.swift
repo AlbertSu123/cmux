@@ -76,7 +76,7 @@ import Testing
         let context = try #require(engine.buildContext(from: messages))
         let prompt = engine.buildPrompt(currentTitle: nil, context: context)
         #expect(prompt.contains("Name Pi and OpenCode sessions"))
-        #expect(prompt.contains("Use the same auto-naming engine."))
+        #expect(!prompt.contains("Use the same auto-naming engine."))
         #expect(!prompt.contains("current title"))
     }
 }

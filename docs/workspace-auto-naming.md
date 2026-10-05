@@ -6,7 +6,7 @@ Off by default. Enable it in **Settings > Automation > Workspace Auto-Naming** o
 
 ## What it does
 
-- At the end of an agent turn, cmux summarizes the session's recent conversation into a 2-5 word title (in the conversation's language) and applies it to the workspace. When a workspace has multiple tabs, the agent's own tab is named too.
+- At the end of an agent turn, cmux summarizes the session's first user query into a 2-5 word title (in the conversation's language) and applies it to the workspace. When a workspace has multiple tabs, the agent's own tab is named too.
 - Names come from the first user query and stay fixed as the conversation grows or resumes. Failed naming attempts retry after a cooldown.
 - Summarization runs through your own agent binary: `claude -p` for Claude Code sessions (model from `ANTHROPIC_SMALL_FAST_MODEL` when set, the fast default otherwise; Vertex/Bedrock backend selection is preserved), `codex exec` for Codex sessions, and each supported hook agent's own non-interactive CLI for its sessions. Each agent names itself, so the calls use the account you already authenticated, and a machine without another agent installed simply skips that adapter.
 
