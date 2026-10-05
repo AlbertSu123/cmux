@@ -30,6 +30,26 @@ import Testing
 
     // MARK: - Throttle
 
+    @Test func namedSessionKeepsItsFirstTitleAfterGrowthAndCompaction() {
+        let named = snapshot(lastTitle: "Fix login redirect", lastLineCount: 100, lastNamedAt: 1)
+        for lineCount in [0, 20, 100, 10000] {
+            #expect(engine.throttleDecision(snapshot: named, transcriptLineCount: lineCount,
+                now: Date(timeIntervalSince1970: 1000000)) == .skipAlreadyNamed)
+        }
+    }
+
+    @Test func contextUsesOnlyTheFirstQuery() {
+        let messages = [
+            AutoNamingTranscriptMessage(role: "assistant", text: "Welcome"),
+            AutoNamingTranscriptMessage(role: "user", text: "Fix login redirect"),
+            AutoNamingTranscriptMessage(role: "assistant", text: "Fixed it"),
+            AutoNamingTranscriptMessage(role: "user", text: "Now compare hotels")
+        ]
+        #expect(engine.buildContext(from: messages) == "user: Fix login redirect")
+        #expect(engine.buildContext(from: [messages[0]]) == nil)
+    }
+
+
     @Test func firstNamingAlwaysQualifies() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let decision = engine.throttleDecision(
