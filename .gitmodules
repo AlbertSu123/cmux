@@ -1,7 +1,7 @@
 [submodule "ghostty"]
 	path = ghostty
-	url = https://github.com/manaflow-ai/ghostty.git
-	branch = main
+	url = https://github.com/AlbertSu123/ghostty.git
+	branch = albert-vnc-links
 [submodule "homebrew-cmux"]
 	path = homebrew-cmux
 	url = https://github.com/manaflow-ai/homebrew-cmux.git

@@ -43,7 +43,7 @@ extension CMUXCLI {
         }
 
         guard let transcriptPath = parsedInput.transcriptPath ?? mappedSession?.transcriptPath else { return }
-        guard let lines = readRecentTextFileLines(path: transcriptPath, maxBytes: 512 * 1024), !lines.isEmpty else {
+        guard let lines = AutoNamingEngine().readInitialTranscriptLines(path: transcriptPath), !lines.isEmpty else {
             return
         }
         let lineCount = textFileGrowthMetric(path: transcriptPath, fallbackLineCount: lines.count)
@@ -196,7 +196,7 @@ extension CMUXCLI {
         let transcriptPath = normalizedHookValue(optionValue(commandArgs, name: "--transcript"))
             ?? findCodexTranscriptPath(sessionId: sessionId, env: env)
         guard let transcriptPath,
-              let lines = readRecentTextFileLines(path: transcriptPath, maxBytes: 512 * 1024),
+              let lines = AutoNamingEngine().readInitialTranscriptLines(path: transcriptPath),
               !lines.isEmpty else {
             return
         }

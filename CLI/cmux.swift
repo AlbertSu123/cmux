@@ -1109,7 +1109,7 @@ final class ClaudeHookSessionStore {
                 record.autoNameInFlightAt = now.timeIntervalSince1970
             case .reseedBaseline(let to):
                 record.autoNameLastLineCount = to
-            case .skipShortTranscript, .skipInFlight, .skipTooSoon, .skipInsufficientGrowth:
+            case .skipAlreadyNamed, .skipShortTranscript, .skipInFlight, .skipTooSoon, .skipInsufficientGrowth:
                 break
             }
             record.updatedAt = Date().timeIntervalSince1970
@@ -1959,7 +1959,8 @@ final class ClaudeHookSessionStore {
             appendedCount += 1
         }
         if recent.count > Self.maxAutoNameRecentMessages {
-            recent.removeFirst(recent.count - Self.maxAutoNameRecentMessages)
+            // Retain the opening messages even before naming succeeds.
+            recent.removeLast(recent.count - Self.maxAutoNameRecentMessages)
         }
         record.autoNameRecentMessages = recent.isEmpty ? nil : recent
         if appendedCount > 0 {

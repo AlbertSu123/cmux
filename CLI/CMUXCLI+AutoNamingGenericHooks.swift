@@ -90,7 +90,7 @@ extension CMUXCLI {
                     return nil
                 }
                 let historyURL = sessionURL.appendingPathComponent("chat_history.jsonl", isDirectory: false)
-                guard let lines = readRecentTextFileLines(path: historyURL.path, maxBytes: 512 * 1024),
+                guard let lines = AutoNamingEngine().readInitialTranscriptLines(path: historyURL.path),
                       !lines.isEmpty else {
                     return nil
                 }

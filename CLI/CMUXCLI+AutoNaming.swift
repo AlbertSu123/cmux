@@ -72,6 +72,7 @@ enum AutoNamingThrottleDecision: Equatable, Sendable {
     /// The transcript shrank (compaction or resume rewrite): record the new
     /// baseline without naming so future growth measures from it.
     case reseedBaseline(to: Int)
+    case skipAlreadyNamed
     case skipShortTranscript
     case skipInFlight
     case skipTooSoon
@@ -179,6 +180,11 @@ struct AutoNamingEngine: Sendable {
         transcriptLineCount: Int,
         now: Date
     ) -> AutoNamingThrottleDecision {
+        // A successful title belongs to the opening query for the lifetime of
+        // this session, including resume and transcript compaction.
+        if let title = snapshot.lastTitle, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .skipAlreadyNamed
+        }
         guard transcriptLineCount >= config.minTranscriptLines else {
             return .skipShortTranscript
         }
@@ -227,7 +233,8 @@ struct AutoNamingEngine: Sendable {
             guard let role = object["type"] as? String, role == "user" || role == "assistant" else {
                 continue
             }
-            guard let message = object["message"] as? [String: Any] else { continue }
+            guard object["isMeta"] as? Bool != true, object["isSidechain"] as? Bool != true,
+                  let message = object["message"] as? [String: Any] else { continue }
             var text = ""
             if let content = message["content"] as? String {
                 text = content
@@ -244,24 +251,25 @@ struct AutoNamingEngine: Sendable {
         return messages
     }
 
-    /// Builds the summarization context: the first user messages anchor the
-    /// session's purpose, the trailing messages capture the current topic.
-    func buildContext(from messages: [AutoNamingTranscriptMessage]) -> String? {
-        guard !messages.isEmpty else { return nil }
-        let headUser = messages
-            .filter { $0.role == "user" }
-            .prefix(config.contextHeadUserMessages)
-        let tail = messages.suffix(config.contextTailMessages)
-        var seen = Set<String>()
-        var parts: [String] = []
-        for message in Array(headUser) + Array(tail) {
-            let excerpt = String(message.text.prefix(config.contextMessageMaxChars))
-            let key = "\(message.role):\(excerpt)"
-            guard seen.insert(key).inserted else { continue }
-            parts.append("\(message.role): \(excerpt)")
+    /// Reads the beginning, so a long resumed transcript still names its
+    /// original query. Discard a truncated last JSONL record.
+    func readInitialTranscriptLines(path: String, maxBytes: Int = 4 * 1024 * 1024) -> [String]? {
+        guard maxBytes > 0,
+              let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else { return nil }
+        defer { try? handle.close() }
+        guard var data = try? handle.read(upToCount: maxBytes), !data.isEmpty else { return nil }
+        if data.count == maxBytes, data.last != 0x0A {
+            guard let lastNewline = data.lastIndex(of: 0x0A) else { return nil }
+            data = data.prefix(through: lastNewline)
         }
-        let context = parts.joined(separator: "\n")
-        return context.isEmpty ? nil : context
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        return text.components(separatedBy: .newlines)
+    }
+
+    /// The first actual user query is the permanent naming context.
+    func buildContext(from messages: [AutoNamingTranscriptMessage]) -> String? {
+        guard let firstQuery = messages.first(where: { $0.role == "user" }) else { return nil }
+        return "user: \(String(firstQuery.text.prefix(config.contextMessageMaxChars)))"
     }
 
     // MARK: - Transcript extraction (Codex rollout JSONL)
@@ -294,6 +302,7 @@ struct AutoNamingEngine: Sendable {
             // Codex injects framework context as user messages wrapped in
             // angle-bracket tags; they describe the harness, not the topic.
             if trimmed.hasPrefix("<"), trimmed.contains(">") { continue }
+            if trimmed.hasPrefix("# AGENTS.md instructions") { continue }
             messages.append(AutoNamingTranscriptMessage(role: role, text: trimmed))
         }
         return messages
@@ -363,7 +372,7 @@ struct AutoNamingEngine: Sendable {
     func buildPrompt(currentTitle: String?, context: String) -> String {
         var lines: [String] = [
             "You name terminal workspace tabs for a developer running coding agents.",
-            "Given a conversation excerpt, output ONLY a short title: 2-5 words,",
+            "Given the first user query, output ONLY a short title: 2-5 words,",
             "in the same language as the conversation, no quotes, no trailing punctuation.",
             ""
         ]

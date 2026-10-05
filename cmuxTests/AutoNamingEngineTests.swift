@@ -30,6 +30,26 @@ import Testing
 
     // MARK: - Throttle
 
+    @Test func namedSessionKeepsItsFirstTitleAfterGrowthAndCompaction() {
+        let named = snapshot(lastTitle: "Fix login redirect", lastLineCount: 100, lastNamedAt: 1)
+        for lineCount in [0, 20, 100, 10000] {
+            #expect(engine.throttleDecision(snapshot: named, transcriptLineCount: lineCount,
+                now: Date(timeIntervalSince1970: 1000000)) == .skipAlreadyNamed)
+        }
+    }
+
+    @Test func contextUsesOnlyTheFirstQuery() {
+        let messages = [
+            AutoNamingTranscriptMessage(role: "assistant", text: "Welcome"),
+            AutoNamingTranscriptMessage(role: "user", text: "Fix login redirect"),
+            AutoNamingTranscriptMessage(role: "assistant", text: "Fixed it"),
+            AutoNamingTranscriptMessage(role: "user", text: "Now compare hotels")
+        ]
+        #expect(engine.buildContext(from: messages) == "user: Fix login redirect")
+        #expect(engine.buildContext(from: [messages[0]]) == nil)
+    }
+
+
     @Test func firstNamingAlwaysQualifies() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let decision = engine.throttleDecision(
@@ -53,7 +73,7 @@ import Testing
     @Test func insufficientGrowthSkipsAndSufficientGrowthQualifies() {
         let base = TimeInterval(1_000_000)
         let now = Date(timeIntervalSince1970: base + config.minInterval + 1)
-        let named = snapshot(lastTitle: "Fix auth bug", lastLineCount: 100, lastNamedAt: base)
+        let named = snapshot(lastLineCount: 100, lastNamedAt: base)
 
         let tooLittle = engine.throttleDecision(
             snapshot: named,
@@ -74,7 +94,7 @@ import Testing
         let base = TimeInterval(1_000_000)
         let tooSoon = Date(timeIntervalSince1970: base + config.minInterval - 1)
         let decision = engine.throttleDecision(
-            snapshot: snapshot(lastTitle: "Fix auth bug", lastLineCount: 100, lastNamedAt: base),
+            snapshot: snapshot(lastLineCount: 100, lastNamedAt: base),
             transcriptLineCount: 100 + config.minLineGrowth * 10,
             now: tooSoon
         )
@@ -109,7 +129,7 @@ import Testing
         let base = TimeInterval(1_000_000)
         let attemptAt = base + config.minInterval * 5
         let snap = snapshot(
-            lastTitle: "Old", lastLineCount: 100, lastNamedAt: base, lastAttemptAt: attemptAt
+            lastLineCount: 100, lastNamedAt: base, lastAttemptAt: attemptAt
         )
         let decision = engine.throttleDecision(
             snapshot: snap,
@@ -123,7 +143,7 @@ import Testing
         let base = TimeInterval(1_000_000)
         let now = Date(timeIntervalSince1970: base + config.minInterval + 1)
         let decision = engine.throttleDecision(
-            snapshot: snapshot(lastTitle: "Fix auth bug", lastLineCount: 500, lastNamedAt: base),
+            snapshot: snapshot(lastLineCount: 500, lastNamedAt: base),
             transcriptLineCount: 60,
             now: now
         )
@@ -181,26 +201,14 @@ import Testing
         #expect(engine.extractMessages(fromTranscriptLines: ["", "garbage", "{}"]).isEmpty)
     }
 
-    @Test func contextCombinesHeadUserMessagesAndTailWithTruncation() throws {
-        let longText = String(repeating: "x", count: config.contextMessageMaxChars + 100)
-        var messages: [AutoNamingTranscriptMessage] = [
-            AutoNamingTranscriptMessage(role: "user", text: "First ask"),
-            AutoNamingTranscriptMessage(role: "user", text: "Second ask"),
-            AutoNamingTranscriptMessage(role: "user", text: "Third ask")
-        ]
-        for index in 0..<10 {
-            messages.append(AutoNamingTranscriptMessage(role: "assistant", text: "Reply \(index)"))
-        }
-        messages.append(AutoNamingTranscriptMessage(role: "user", text: longText))
-
-        let context = try #require(engine.buildContext(from: messages))
-        #expect(context.contains("user: First ask"))
-        #expect(context.contains("user: Second ask"))
-        #expect(!context.contains("Third ask"))
-        #expect(context.contains("Reply 9"))
-        // The long tail message is truncated to the per-message cap.
-        #expect(!context.contains(longText))
-        #expect(context.contains(String(longText.prefix(config.contextMessageMaxChars))))
+    @Test func initialTranscriptReadKeepsOpeningQueryAndDropsPartialRecord() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let opening = jsonlLine(role: "user", content: "Fix login redirect")
+        let later = jsonlLine(role: "user", content: String(repeating: "x", count: 1000))
+        try (opening + "\n" + later + "\n").write(to: url, atomically: true, encoding: .utf8)
+        let lines = try #require(engine.readInitialTranscriptLines(path: url.path, maxBytes: opening.utf8.count + 20))
+        #expect(engine.buildContext(from: engine.extractMessages(fromTranscriptLines: lines)) == "user: Fix login redirect")
     }
 
     // MARK: - Prompt
