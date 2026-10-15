@@ -81,7 +81,9 @@ public final class TerminalPasteboardReadLease: @unchecked Sendable {
         finishHandler()
     }
 
-    var isReady: Bool {
+    /// A ready lease may snapshot the clipboard synchronously before an actor hop.
+    /// Waiting leases must not read ahead of earlier clipboard mutations.
+    public var isReady: Bool {
         state.withLock { state in
             if case .ready = state { return true }
             return false

@@ -38,6 +38,19 @@ extension GhosttyApp {
             return false
         }
 
+        // Dictation restores the clipboard soon after the native Paste action.
+        // Capture while handling that action, before scheduling the main-actor
+        // task. A queued lease must still observe preceding cmux-owned writes.
+        let immediateReadRequest: TerminalPasteboardReadRequest?
+        if Thread.isMainThread, pasteboardReadLease.isReady,
+           let pasteboard = terminalPasteboard.pasteboard(for: location) {
+            immediateReadRequest = MainActor.assumeIsolated {
+                TerminalPasteboardReadRequest(pasteboard: pasteboard)
+            }
+        } else {
+            immediateReadRequest = nil
+        }
+
         let (startEvents, startContinuation) = AsyncStream.makeStream(
             of: Void.self,
             bufferingPolicy: .bufferingNewest(1)
@@ -135,10 +148,11 @@ extension GhosttyApp {
                 .map(\.rawValue)
                 .joined(separator: ",")
 
-            let preparedContent = await TerminalImageTransferPlanner.prepare(
-                pasteboard: pasteboard,
-                mode: .paste,
-                using: preparationService
+            let readRequest = immediateReadRequest
+                ?? TerminalPasteboardReadRequest(pasteboard: pasteboard)
+            let preparedContent = await preparationService.prepare(
+                request: readRequest,
+                mode: .paste
             )
             pasteboardReadLease.finish()
 

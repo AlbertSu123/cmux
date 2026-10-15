@@ -13,6 +13,9 @@ struct TerminalPastePreparationOperation: Sendable {
         request: TerminalPastePreparationRequest
     ) -> TerminalPastePreparationResult {
         let readRequest = request.pasteboard
+        if let result = request.capturedPlainTextResult {
+            return result
+        }
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name(readRequest.pasteboardName)
         )
